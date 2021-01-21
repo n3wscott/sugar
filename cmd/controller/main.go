@@ -1,5 +1,5 @@
 /*
-Copyright 2019 The Knative Authors
+Copyright 2021 The Knative Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,8 +18,7 @@ package main
 
 import (
 	// The set of controllers this controller process runs.
-	"knative.dev/sugar/pkg/reconciler/addressableservice"
-	"knative.dev/sugar/pkg/reconciler/simpledeployment"
+	"knative.dev/sugar/pkg/reconciler/clusterducktype"
 
 	// This defines the shared main for injected controllers.
 	"knative.dev/pkg/injection/sharedmain"
@@ -27,7 +26,6 @@ import (
 
 func main() {
 	sharedmain.Main("controller",
-		addressableservice.NewController,
-		simpledeployment.NewController,
+		clusterducktype.NewController,
 	)
 }

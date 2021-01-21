@@ -36,3 +36,6 @@ rules:
   - apiGroups: ["samples.knative.dev"]
     resources: ["*"]
     verbs: ["get", "list", "create", "update", "delete", "deletecollection", "patch", "watch"]
+  - apiGroups: ["discovery.knative.dev"]
+    resources: ["clusterducktypes"]
+    verbs: ["get", "list", "watch"]
