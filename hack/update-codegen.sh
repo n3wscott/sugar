@@ -31,18 +31,18 @@ group "Kubernetes Codegen"
 # --output-base    because this script should also be able to run inside the vendor dir of
 #                  k8s.io/kubernetes. The output-base is needed for the generators to output into the vendor dir
 #                  instead of the $GOPATH directly. For normal projects this can be dropped.
-${CODEGEN_PKG}/generate-groups.sh "deepcopy,client,informer,lister" \
-  knative.dev/sugar/pkg/client knative.dev/sugar/pkg/apis \
-  "samples:v1alpha1" \
-  --go-header-file ${REPO_ROOT_DIR}/hack/boilerplate/boilerplate.go.txt
+#${CODEGEN_PKG}/generate-groups.sh "deepcopy,client,informer,lister" \
+#  knative.dev/sugar/pkg/client knative.dev/sugar/pkg/apis \
+#  "samples:v1alpha1" \
+#  --go-header-file ${REPO_ROOT_DIR}/hack/boilerplate/boilerplate.go.txt
 
 group "Knative Codegen"
 
-# Knative Injection
-${KNATIVE_CODEGEN_PKG}/hack/generate-knative.sh "injection" \
-  knative.dev/sugar/pkg/client knative.dev/sugar/pkg/apis \
-  "samples:v1alpha1" \
-  --go-header-file ${REPO_ROOT_DIR}/hack/boilerplate/boilerplate.go.txt
+## Knative Injection
+#${KNATIVE_CODEGEN_PKG}/hack/generate-knative.sh "injection" \
+#  knative.dev/sugar/pkg/client knative.dev/sugar/pkg/apis \
+#  "samples:v1alpha1" \
+#  --go-header-file ${REPO_ROOT_DIR}/hack/boilerplate/boilerplate.go.txt
 
 group "Update deps post-codegen"
 
