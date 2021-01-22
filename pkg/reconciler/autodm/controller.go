@@ -18,6 +18,7 @@ package autodm
 
 import (
 	"context"
+	"k8s.io/client-go/tools/cache"
 
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -27,7 +28,10 @@ import (
 	"knative.dev/pkg/injection"
 	"knative.dev/pkg/logging"
 
+	clusterducktypeinformer "knative.dev/discovery/pkg/client/injection/informers/discovery/v1alpha1/clusterducktype"
 	addressaleinformer "knative.dev/pkg/client/injection/ducks/duck/v1/addressable"
+	servingclient "knative.dev/serving/pkg/client/injection/client"
+	domainmappinginformer "knative.dev/serving/pkg/client/injection/informers/serving/v1alpha1/domainmapping"
 )
 
 const (
@@ -44,15 +48,24 @@ func NewController(gvr schema.GroupVersionResource) injection.ControllerConstruc
 		logger := logging.FromContext(ctx)
 		addressableduckInformer := addressaleinformer.Get(ctx)
 
+		domainMapInfomer := domainmappinginformer.Get(ctx)
+
 		addressableInformer, addressableLister, err := addressableduckInformer.Get(ctx, gvr)
 		if err != nil {
 			logger.Errorw("Error getting source informer", zap.String("GVR", gvr.String()), zap.Error(err))
 			return nil
 		}
 
+		cdtInformer := clusterducktypeinformer.Get(ctx)
+
 		r := &Reconciler{
-			addressableLister: addressableLister,
-			gvr:               gvr,
+			addressableDuckInformer: addressableduckInformer,
+			addressableLister:       addressableLister,
+			domainMappingLister:     domainMapInfomer.Lister(),
+			gvr:                     gvr,
+			cdtLister:               cdtInformer.Lister(),
+			ownerListers:            make(map[string]cache.GenericLister, 0),
+			client:                  servingclient.Get(ctx),
 		}
 		impl := controller.NewImplFull(r, controller.ControllerOptions{WorkQueueName: ReconcilerName + gvr.String(), Logger: logger})
 
@@ -60,6 +73,7 @@ func NewController(gvr schema.GroupVersionResource) injection.ControllerConstruc
 		addressableInformer.AddEventHandler(controller.HandleAll(impl.Enqueue))
 
 		// TODO: be informed on DomainMappings mutations.
+		// TODO: be informed on ClusterDuckType mutations.
 
 		return impl
 	}

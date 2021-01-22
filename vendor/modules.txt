@@ -108,6 +108,8 @@ github.com/google/go-cmp/cmp/internal/diff
 github.com/google/go-cmp/cmp/internal/flags
 github.com/google/go-cmp/cmp/internal/function
 github.com/google/go-cmp/cmp/internal/value
+# github.com/google/go-containerregistry v0.2.1
+github.com/google/go-containerregistry/pkg/name
 # github.com/google/gofuzz v1.1.0
 github.com/google/gofuzz
 # github.com/google/licenseclassifier v0.0.0-20200708223521-3d09a0ea2f39
@@ -757,17 +759,18 @@ knative.dev/discovery/pkg/client/injection/informers/discovery/v1alpha1/clusterd
 knative.dev/discovery/pkg/client/injection/informers/factory
 knative.dev/discovery/pkg/client/injection/reconciler/discovery/v1alpha1/clusterducktype
 knative.dev/discovery/pkg/client/listers/discovery/v1alpha1
-# knative.dev/hack v0.0.0-20201214230143-4ed1ecb8db24
+# knative.dev/hack v0.0.0-20210120165453-8d623a0af457
 ## explicit
 knative.dev/hack
 # knative.dev/networking v0.0.0-20210107024535-ecb89ced52d9
 ## explicit
+knative.dev/networking/pkg
 knative.dev/networking/pkg/apis/networking
 knative.dev/networking/pkg/apis/networking/v1alpha1
 knative.dev/networking/pkg/client/clientset/versioned
 knative.dev/networking/pkg/client/clientset/versioned/scheme
 knative.dev/networking/pkg/client/clientset/versioned/typed/networking/v1alpha1
-# knative.dev/pkg v0.0.0-20210107022335-51c72e24c179
+# knative.dev/pkg v0.0.0-20210107022335-51c72e24c179 => ../../knative/pkg
 ## explicit
 knative.dev/pkg/apis
 knative.dev/pkg/apis/duck
@@ -815,6 +818,35 @@ knative.dev/pkg/webhook/configmaps
 knative.dev/pkg/webhook/resourcesemantics
 knative.dev/pkg/webhook/resourcesemantics/defaulting
 knative.dev/pkg/webhook/resourcesemantics/validation
+# knative.dev/serving v0.20.0
+## explicit
+knative.dev/serving/pkg/apis/autoscaling
+knative.dev/serving/pkg/apis/autoscaling/v1alpha1
+knative.dev/serving/pkg/apis/config
+knative.dev/serving/pkg/apis/serving
+knative.dev/serving/pkg/apis/serving/v1
+knative.dev/serving/pkg/apis/serving/v1alpha1
+knative.dev/serving/pkg/autoscaler/config
+knative.dev/serving/pkg/autoscaler/config/autoscalerconfig
+knative.dev/serving/pkg/client/clientset/versioned
+knative.dev/serving/pkg/client/clientset/versioned/scheme
+knative.dev/serving/pkg/client/clientset/versioned/typed/autoscaling/v1alpha1
+knative.dev/serving/pkg/client/clientset/versioned/typed/serving/v1
+knative.dev/serving/pkg/client/clientset/versioned/typed/serving/v1alpha1
+knative.dev/serving/pkg/client/informers/externalversions
+knative.dev/serving/pkg/client/informers/externalversions/autoscaling
+knative.dev/serving/pkg/client/informers/externalversions/autoscaling/v1alpha1
+knative.dev/serving/pkg/client/informers/externalversions/internalinterfaces
+knative.dev/serving/pkg/client/informers/externalversions/serving
+knative.dev/serving/pkg/client/informers/externalversions/serving/v1
+knative.dev/serving/pkg/client/informers/externalversions/serving/v1alpha1
+knative.dev/serving/pkg/client/injection/client
+knative.dev/serving/pkg/client/injection/informers/factory
+knative.dev/serving/pkg/client/injection/informers/serving/v1alpha1/domainmapping
+knative.dev/serving/pkg/client/listers/autoscaling/v1alpha1
+knative.dev/serving/pkg/client/listers/serving/v1
+knative.dev/serving/pkg/client/listers/serving/v1alpha1
+knative.dev/serving/pkg/networking
 # sigs.k8s.io/structured-merge-diff/v3 v3.0.1-0.20200706213357-43c19bbb7fba
 sigs.k8s.io/structured-merge-diff/v3/value
 # sigs.k8s.io/yaml v1.2.0
@@ -827,3 +859,4 @@ sigs.k8s.io/yaml
 # k8s.io/client-go => k8s.io/client-go v0.18.8
 # k8s.io/code-generator => k8s.io/code-generator v0.18.8
 # k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20200410145947-61e04a5be9a6
+# knative.dev/pkg => ../../knative/pkg

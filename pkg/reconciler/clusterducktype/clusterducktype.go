@@ -30,6 +30,7 @@ import (
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/logging"
 	"knative.dev/pkg/reconciler"
+	sugarreconciler "knative.dev/sugar/pkg/reconciler"
 	"knative.dev/sugar/pkg/reconciler/autodm"
 )
 
@@ -51,12 +52,9 @@ type Reconciler struct {
 	lock        sync.Mutex
 }
 
-const addressables = "addressables.duck.knative.dev"
-const addressablesVersion = "v1"
-
 // ReconcileKind implements Interface.ReconcileKind.
 func (r *Reconciler) ReconcileKind(ctx context.Context, dt *discoveryv1alpha1.ClusterDuckType) reconciler.Event {
-	if dt.GetName() == addressables {
+	if dt.GetName() == sugarreconciler.Addressables {
 		return r.reconcileAddressables(ctx, dt)
 	}
 	return nil
@@ -67,7 +65,7 @@ func (r *Reconciler) reconcileAddressables(ctx context.Context, dt *discoveryv1a
 		r.controllers = make(map[string]runningController)
 	}
 
-	for _, v := range dt.Status.Ducks[addressablesVersion] {
+	for _, v := range dt.Status.Ducks[sugarreconciler.AddressablesVersion] {
 		key := fmt.Sprintf("%s.%s", v.Kind, v.Group())
 		logging.FromContext(ctx).Info("going to use addressable - ", key)
 
@@ -107,6 +105,7 @@ func (r *Reconciler) reconcileAddressables(ctx context.Context, dt *discoveryv1a
 	for k, _ := range r.controllers {
 		logging.FromContext(ctx).Infof(" - %q", k)
 	}
+
 	logging.FromContext(ctx).Infof("==========================")
 	return nil
 }
