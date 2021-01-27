@@ -97,7 +97,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string) error {
 func (r *Reconciler) reconcile(ctx context.Context, addr *duckv1.AddressableType) error {
 	logging.FromContext(ctx).Info("reconcile an addressable ", addr.Kind, " ", addr.Name)
 
-	addressables := make(map[string]bool, 0)
+	addressables := make(map[string]bool)
 
 	if dt, err := r.cdtLister.Get(sugarreconciler.Addressables); err != nil {
 		logging.FromContext(ctx).Debug("failed to get cluster duck type for "+sugarreconciler.Addressables, zap.Error(err))
@@ -111,7 +111,7 @@ func (r *Reconciler) reconcile(ctx context.Context, addr *duckv1.AddressableType
 	_ = addressables
 
 	//owner domain maps
-	odm := make(map[string]string, 0)
+	odm := make(map[string]string)
 	for _, owner := range addr.GetOwnerReferences() {
 		gvk := schema.FromAPIVersionAndKind(owner.APIVersion, owner.Kind)
 		key := fmt.Sprintf("%s.%s", gvk.Kind, gvk.Group)
@@ -238,7 +238,7 @@ func (r *Reconciler) findDomainMappingsForOwner(addr *duckv1.AddressableType) ([
 	return ownedDMs, nil
 }
 
-func (c *Reconciler) reconcileDomainMapping(ctx context.Context, desired, existing *servingv1alpha1.DomainMapping) (*servingv1alpha1.DomainMapping, error) {
+func (r *Reconciler) reconcileDomainMapping(ctx context.Context, desired, existing *servingv1alpha1.DomainMapping) (*servingv1alpha1.DomainMapping, error) {
 	existing = existing.DeepCopy()
 	// In the case of an upgrade, there can be default values set that don't exist pre-upgrade.
 	// We are setting the up-to-date default values here so an update won't be triggered if the only
@@ -256,7 +256,7 @@ func (c *Reconciler) reconcileDomainMapping(ctx context.Context, desired, existi
 	existing.Spec = desired.Spec
 	existing.Labels = desired.Labels
 	existing.Annotations = desired.Annotations
-	return c.client.ServingV1alpha1().DomainMappings(existing.Namespace).Update(ctx, existing, metav1.UpdateOptions{})
+	return r.client.ServingV1alpha1().DomainMappings(existing.Namespace).Update(ctx, existing, metav1.UpdateOptions{})
 }
 
 func domainMappingSemanticEquals(ctx context.Context, desired, observed *servingv1alpha1.DomainMapping) (bool, error) {
@@ -320,7 +320,7 @@ func domainMapping(annotations map[string]string) map[string]string {
 	// TODO: this gets complicated real quick, we need to navigate up the owner graph and let the parent resource
 	// make the map if it is annotated with the same annotation.
 
-	dms := make(map[string]string, 0)
+	dms := make(map[string]string)
 	for k, v := range annotations {
 		if strings.HasPrefix(k, sugarreconciler.DomainMappingAnnotationKey) {
 			// TODO: we could split off the index from the annotation key, or confirm it is suffixed with only a number, for now YOLO.

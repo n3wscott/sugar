@@ -6,9 +6,10 @@ require (
 	github.com/google/licenseclassifier v0.0.0-20200708223521-3d09a0ea2f39
 	go.uber.org/zap v1.16.0
 	gopkg.in/yaml.v3 v3.0.0-20200615113413-eeeca48fe776 // indirect
-	k8s.io/apimachinery v0.18.12
+	k8s.io/apimachinery v0.19.7
 	k8s.io/client-go v11.0.1-0.20190805182717-6502b5e7b1b5+incompatible
-	k8s.io/code-generator v0.18.12
+	k8s.io/code-generator v0.19.7
+	k8s.io/klog/v2 v2.5.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20200410145947-bcb3869e6f29
 	knative.dev/discovery v0.20.0
 	knative.dev/hack v0.0.0-20210120165453-8d623a0af457
