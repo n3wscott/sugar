@@ -18,10 +18,11 @@ package autodm
 
 import (
 	"context"
-	"k8s.io/client-go/tools/cache"
 
 	"go.uber.org/zap"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/cache"
 
 	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/controller"
@@ -41,27 +42,25 @@ const (
 
 // NewController returns a function that initializes the controller and
 // Registers event handlers to enqueue events
-func NewController(gvr schema.GroupVersionResource) injection.ControllerConstructor {
+func NewController(gvk schema.GroupVersionKind) injection.ControllerConstructor {
 	return func(ctx context.Context,
 		cmw configmap.Watcher,
 	) *controller.Impl {
 		logger := logging.FromContext(ctx)
 		addressableduckInformer := addressaleinformer.Get(ctx)
-
-		domainMapInfomer := domainmappinginformer.Get(ctx)
-
+		domainMapInformer := domainmappinginformer.Get(ctx)
+		gvr, _ := meta.UnsafeGuessKindToResource(gvk)
 		addressableInformer, addressableLister, err := addressableduckInformer.Get(ctx, gvr)
 		if err != nil {
 			logger.Errorw("Error getting source informer", zap.String("GVR", gvr.String()), zap.Error(err))
 			return nil
 		}
-
 		cdtInformer := clusterducktypeinformer.Get(ctx)
 
 		r := &Reconciler{
 			addressableDuckInformer: addressableduckInformer,
 			addressableLister:       addressableLister,
-			domainMappingLister:     domainMapInfomer.Lister(),
+			domainMappingLister:     domainMapInformer.Lister(),
 			gvr:                     gvr,
 			cdtLister:               cdtInformer.Lister(),
 			ownerListers:            make(map[string]cache.GenericLister, 0),
@@ -70,10 +69,17 @@ func NewController(gvr schema.GroupVersionResource) injection.ControllerConstruc
 		impl := controller.NewImplFull(r, controller.ControllerOptions{WorkQueueName: ReconcilerName + gvr.String(), Logger: logger})
 
 		logger.Info("Setting up event handlers")
+		// Watch for all updates for the addressable.
 		addressableInformer.AddEventHandler(controller.HandleAll(impl.Enqueue))
 
-		// TODO: be informed on DomainMappings mutations.
-		// TODO: be informed on ClusterDuckType mutations.
+		// Also enqueue changes that are owned by this addressable.
+		handleControllerOf := cache.FilteringResourceEventHandler{
+			FilterFunc: controller.FilterControllerGK(gvk.GroupKind()),
+			Handler:    controller.HandleAll(impl.EnqueueControllerOf),
+		}
+
+		// For all domain mappings that are owned by this addressable, enqueue the owner.
+		domainMapInformer.Informer().AddEventHandler(handleControllerOf)
 
 		return impl
 	}

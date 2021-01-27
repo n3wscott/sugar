@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/labels"
 	"knative.dev/pkg/kmp"
 	"strings"
 
@@ -124,8 +125,9 @@ func (r *Reconciler) reconcile(ctx context.Context, addr *duckv1.AddressableType
 		}
 	}
 
+	foundAnnotations := domainMapping(addr.Annotations)
 	// Look for new annotations
-	for k, v := range domainMapping(addr.Annotations) {
+	for k, v := range foundAnnotations {
 		if _, found := odm[k]; !found {
 			logging.FromContext(ctx).Info("===> map ", addr.Kind, " ", addr.Name, " to ", v)
 			if _, err := r.ensureDomainMapping(ctx, addr, k, v); err != nil {
@@ -137,12 +139,48 @@ func (r *Reconciler) reconcile(ctx context.Context, addr *duckv1.AddressableType
 	}
 
 	// Look for deleted annotations.
-	// TODO implement
-
+	if dms, err := r.findDomainMappingsForOwner(addr); err != nil {
+		logging.FromContext(ctx).Debug("failed to get list domain mappings for addressable", zap.Error(err))
+	} else {
+		// Compare the annotations we know are on the addressable to the existing domain mappings that are owned by
+		// this addressable. We want to delete the ones that exist and are no longer annotated.
+		for _, dm := range dms {
+			found := false
+			for k, v := range foundAnnotations {
+				if hasHint(ctx, dm, k) {
+					if dm.Name == v {
+						found = true
+					}
+					break
+				}
+			}
+			if !found {
+				logging.FromContext(ctx).Info("did not find the domain map in the annotations, deleting.", zap.String("domainmapping", dm.Namespace+"/"+dm.Name))
+				if err := r.client.ServingV1alpha1().DomainMappings(dm.Namespace).Delete(ctx, dm.Name, metav1.DeleteOptions{}); err != nil {
+					logging.FromContext(ctx).Info("failed to delete a domain mapping", zap.String("domainmapping", dm.Namespace+"/"+dm.Name), zap.Error(err))
+				}
+			}
+		}
+	}
 	return nil
 }
+
+func hasHint(ctx context.Context, dm *servingv1alpha1.DomainMapping, expected string) bool {
+	value, found := dm.Annotations[sugarreconciler.DomainMappingHintAnnotationKey]
+
+	// TODO: remove debug.
+	logging.FromContext(ctx).Info("hasHint -> ", value, expected, found)
+
+	if !found {
+		return false
+	}
+	return value == expected
+}
+
 func (r *Reconciler) ensureDomainMapping(ctx context.Context, addr *duckv1.AddressableType, key, value string) (*servingv1alpha1.DomainMapping, error) {
 	//recorder := controller.GetEventRecorder(ctx)
+
+	// TODO: the domain mapping hint needs to match the key we are passed here, or it is the wrong domain map.
 
 	dm := resources.MakeDomainMapping(&resources.DomainMappingArgs{
 		Name:  value,
@@ -164,13 +202,40 @@ func (r *Reconciler) ensureDomainMapping(ctx context.Context, addr *duckv1.Addre
 		}
 		//recorder.Eventf(addr, corev1.EventTypeNormal, "Created", "Created DomainMapping %q", value)
 	} else if err != nil {
-		return nil, fmt.Errorf("failed to get Route: %w", err)
+		return nil, fmt.Errorf("failed to get DomainMapping: %w", err)
 	} else if !metav1.IsControlledBy(existing, addr) {
 		return nil, fmt.Errorf("addressable[%s]: %q does not own domain mapping: %q", addr.Kind, addr.Name, value)
 	} else if dm, err = r.reconcileDomainMapping(ctx, dm, existing); err != nil {
-		return nil, fmt.Errorf("failed to reconcile Route: %w", err)
+		return nil, fmt.Errorf("failed to reconcile DomainMapping: %w", err)
 	}
 	return dm, nil
+}
+
+func (r *Reconciler) findDomainMappingsForOwner(addr *duckv1.AddressableType) ([]*servingv1alpha1.DomainMapping, error) {
+	selector, err := labels.Parse(fmt.Sprintf("%s=%s", sugarreconciler.SugarOwnerLabelKey, sugarreconciler.AutoDomainMappingLabel))
+	if err != nil {
+		return nil, fmt.Errorf("failed to produce label selector: %w", err)
+	}
+
+	dms, err := r.domainMappingLister.DomainMappings(addr.Namespace).List(selector)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list DomainMapping: %w", err)
+	}
+
+	// Filter for the owner.
+	ownedDMs := make([]*servingv1alpha1.DomainMapping, 0)
+	for _, dm := range dms {
+		owner := metav1.GetControllerOf(dm)
+		if owner != nil &&
+			owner.APIVersion == addr.APIVersion &&
+			owner.Kind == addr.Kind &&
+			owner.Name == addr.Name &&
+			dm.Namespace == addr.Namespace {
+			ownedDMs = append(ownedDMs, dm)
+		}
+
+	}
+	return ownedDMs, nil
 }
 
 func (c *Reconciler) reconcileDomainMapping(ctx context.Context, desired, existing *servingv1alpha1.DomainMapping) (*servingv1alpha1.DomainMapping, error) {
@@ -243,11 +308,6 @@ func (r *Reconciler) getAddressable(ctx context.Context, namespace, name string,
 	return original, nil
 }
 
-type keyValue struct {
-	key   string
-	value string
-}
-
 func joinMap(main, add map[string]string) {
 	for k, v := range add {
 		main[k] = v
@@ -262,7 +322,7 @@ func domainMapping(annotations map[string]string) map[string]string {
 
 	dms := make(map[string]string, 0)
 	for k, v := range annotations {
-		if strings.HasPrefix(k, sugarreconciler.DomainMappingAnnotation) {
+		if strings.HasPrefix(k, sugarreconciler.DomainMappingAnnotationKey) {
 			// TODO: we could split off the index from the annotation key, or confirm it is suffixed with only a number, for now YOLO.
 			dms[k] = v
 		}
