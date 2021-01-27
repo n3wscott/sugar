@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"sync"
 
-	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	discoveryv1alpha1 "knative.dev/discovery/pkg/apis/discovery/v1alpha1"
@@ -35,7 +34,7 @@ import (
 )
 
 type runningController struct {
-	gvr        schema.GroupVersionResource
+	gvk        schema.GroupVersionKind
 	controller *controller.Impl
 	cancel     context.CancelFunc
 }
@@ -75,15 +74,14 @@ func (r *Reconciler) reconcileAddressables(ctx context.Context, dt *discoveryv1a
 				Version: v.Version(),
 				Kind:    v.Kind,
 			}
-			gvr, _ := meta.UnsafeGuessKindToResource(gvk)
-			cc := autodm.NewController(gvr)
+			cc := autodm.NewController(gvk)
 
 			atctx, cancel := context.WithCancel(r.ogctx)
 			// Auto Trigger
 			impl := cc(atctx, r.ogcmw)
 
 			rc = runningController{
-				gvr:        gvr,
+				gvk:        gvk,
 				controller: impl,
 				cancel:     cancel,
 			}
@@ -92,10 +90,10 @@ func (r *Reconciler) reconcileAddressables(ctx context.Context, dt *discoveryv1a
 			r.controllers[key] = rc
 			r.lock.Unlock()
 
-			logging.FromContext(ctx).Infof("starting auto domain mapping reconciler for gvr %q", rc.gvr.String())
+			logging.FromContext(ctx).Infof("starting auto domain mapping reconciler for gvk %q", rc.gvk.String())
 			go func(c *controller.Impl) {
 				if err := c.Run(2, atctx.Done()); err != nil {
-					logging.FromContext(ctx).Errorf("unable to start auto domain mapping reconciler for gvr %q", rc.gvr.String())
+					logging.FromContext(ctx).Errorf("unable to start auto domain mapping reconciler for gvk %q", rc.gvk.String())
 				}
 			}(rc.controller)
 		}

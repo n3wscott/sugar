@@ -16,8 +16,13 @@ limitations under the License.
 package reconciler
 
 const (
-	Addressables                = "addressables.duck.knative.dev"
-	AddressablesVersion         = "v1"
-	DomainMappingAnnotation     = "sugar.knative.dev/domainmapping"
-	DomainMappingHintAnnotation = "sugar.knative.dev/domainmapping.hint"
+	Addressables        = "addressables.duck.knative.dev"
+	AddressablesVersion = "v1"
+
+	SugarPrefixKey                 = "sugar.knative.dev"
+	DomainMappingAnnotationKey     = SugarPrefixKey + "/domainmapping"
+	DomainMappingHintAnnotationKey = SugarPrefixKey + "/domainmapping.hint"
+
+	SugarOwnerLabelKey     = SugarPrefixKey + "/owner"
+	AutoDomainMappingLabel = "domainmapping"
 )

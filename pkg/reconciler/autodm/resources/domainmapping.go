@@ -42,6 +42,7 @@ func MakeDomainMapping(args *DomainMappingArgs) *servingv1alpha1.DomainMapping {
 			OwnerReferences: []metav1.OwnerReference{
 				*kmeta.NewControllerRef(args.Owner),
 			},
+			Labels:      DomainMappingLabels(),
 			Annotations: DomainMappingAnnotations(args.Hint),
 		},
 		Spec: servingv1alpha1.DomainMappingSpec{
@@ -50,9 +51,16 @@ func MakeDomainMapping(args *DomainMappingArgs) *servingv1alpha1.DomainMapping {
 	}
 }
 
+// DomainMappingLabels
+func DomainMappingLabels() map[string]string {
+	return map[string]string{
+		reconciler.SugarOwnerLabelKey: reconciler.AutoDomainMappingLabel,
+	}
+}
+
 // DomainMappingAnnotations
 func DomainMappingAnnotations(hint string) map[string]string {
 	return map[string]string{
-		reconciler.DomainMappingHintAnnotation: hint,
+		reconciler.DomainMappingHintAnnotationKey: hint,
 	}
 }
