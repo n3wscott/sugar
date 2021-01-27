@@ -63,7 +63,7 @@ func NewController(gvk schema.GroupVersionKind) injection.ControllerConstructor 
 			domainMappingLister:     domainMapInformer.Lister(),
 			gvr:                     gvr,
 			cdtLister:               cdtInformer.Lister(),
-			ownerListers:            make(map[string]cache.GenericLister, 0),
+			ownerListers:            make(map[string]cache.GenericLister),
 			client:                  servingclient.Get(ctx),
 		}
 		impl := controller.NewImplFull(r, controller.ControllerOptions{WorkQueueName: ReconcilerName + gvr.String(), Logger: logger})
