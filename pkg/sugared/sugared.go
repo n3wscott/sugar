@@ -66,8 +66,8 @@ func (sd *SugarDispenser) getLister(ctx context.Context, gvk schema.GroupVersion
 	return lister, nil
 }
 
-func (sd *SugarDispenser) List(ctx context.Context, namespace string, gvks []schema.GroupVersionKind) ([]*Sugared, error) {
-	all := make([]*Sugared, 0)
+func (sd *SugarDispenser) List(ctx context.Context, namespace string, gvks []schema.GroupVersionKind) ([]*Turbinado, error) {
+	all := make([]*Turbinado, 0)
 	for _, gvk := range gvks {
 		s, err := sd.list(ctx, namespace, gvk)
 		if err != nil {
@@ -78,7 +78,7 @@ func (sd *SugarDispenser) List(ctx context.Context, namespace string, gvks []sch
 	return all, nil
 }
 
-func (sd *SugarDispenser) list(ctx context.Context, namespace string, gvk schema.GroupVersionKind) ([]*Sugared, error) {
+func (sd *SugarDispenser) list(ctx context.Context, namespace string, gvk schema.GroupVersionKind) ([]*Turbinado, error) {
 	selector, err := labels.Parse(fmt.Sprintf("%s=%s", sugarreconciler.SugarOwnerLabelKey, sugarreconciler.AutoDomainMappingLabel))
 	if err != nil {
 		return nil, fmt.Errorf("failed to produce label selector: %w", err)
@@ -96,7 +96,7 @@ func (sd *SugarDispenser) list(ctx context.Context, namespace string, gvk schema
 		return nil, err
 	}
 
-	s := make([]*Sugared, 0)
+	s := make([]*Turbinado, 0)
 	for _, runtimeObj := range runtimeObjs {
 		var ok bool
 		var resource kmeta.OwnerRefable
@@ -104,7 +104,7 @@ func (sd *SugarDispenser) list(ctx context.Context, namespace string, gvk schema
 			return nil, errors.New("runtime object is not convertible to kmeta.OwnerRefable type")
 		}
 
-		s = append(s, &Sugared{
+		s = append(s, &Turbinado{
 			Resource: resource,
 			Prefix:   sd.prefix,
 		})
@@ -112,7 +112,7 @@ func (sd *SugarDispenser) list(ctx context.Context, namespace string, gvk schema
 	return s, nil
 }
 
-func (sd *SugarDispenser) Get(ctx context.Context, namespace, name string, gvk schema.GroupVersionKind) (*Sugared, error) {
+func (sd *SugarDispenser) Get(ctx context.Context, namespace, name string, gvk schema.GroupVersionKind) (*Turbinado, error) {
 	lister, err := sd.getLister(ctx, gvk)
 	if err != nil {
 		return nil, err
@@ -131,7 +131,7 @@ func (sd *SugarDispenser) Get(ctx context.Context, namespace, name string, gvk s
 		return nil, errors.New("runtime object is not convertible to kmeta.OwnerRefable type")
 	}
 
-	return &Sugared{
+	return &Turbinado{
 		Resource: resource,
 		Prefix:   sd.prefix,
 	}, nil
@@ -158,7 +158,7 @@ func (sd *SugarDispenser) IsDuck(ctx context.Context, gvk schema.GroupVersionKin
 // OwnerSugaredDuckConfig will return the config of the owner of the sugared resource.
 // For now, we will only look up one level in the owners graph.
 // TODO: rename?
-func (sd *SugarDispenser) OwnerSugaredDuckConfig(ctx context.Context, sugared *Sugared) (*Config, bool) {
+func (sd *SugarDispenser) OwnerSugaredDuckConfig(ctx context.Context, sugared *Turbinado) (*Config, bool) {
 	// TODO: we could filter by Owner Controller.
 	for _, owner := range sugared.Resource.GetObjectMeta().GetOwnerReferences() {
 		gvk := schema.FromAPIVersionAndKind(owner.APIVersion, owner.Kind)
@@ -185,19 +185,18 @@ func (sd *SugarDispenser) OwnerSugaredDuckConfig(ctx context.Context, sugared *S
 	return nil, false
 }
 
-type Sugared struct {
+type Turbinado struct {
 	Resource kmeta.OwnerRefable
-	Prefix   string // like sugarreconciler.DomainMappingAnnotationKey
-	// TODO: needs to know the set of other children Resource might create/own?
+	Prefix   string
 }
 
 type Config struct {
-	Sugar       *Sugared
+	Raw         *Turbinado
 	Annotations map[string]string
 	Labels      map[string]string
 }
 
-func (s *Sugared) Config() *Config {
+func (s *Turbinado) Config() *Config {
 	// prefix[extras] = values  ---> hint = prefix+extras
 
 	annotations := make(map[string]string)
@@ -217,14 +216,14 @@ func (s *Sugared) Config() *Config {
 	}
 
 	return &Config{
-		Sugar:       s,
+		Raw:         s,
 		Annotations: annotations,
 		Labels:      lbs,
 	}
 }
 
 func (c *Config) Hint() string {
-	return c.Sugar.Prefix + ".hint"
+	return c.Raw.Prefix + ".hint"
 }
 
 func (c *Config) ApplyHint(resource kmeta.OwnerRefable, hint string) {

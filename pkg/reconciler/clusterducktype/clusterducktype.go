@@ -19,6 +19,7 @@ package clusterducktype
 import (
 	"context"
 	"fmt"
+	"knative.dev/sugar/pkg/reconciler/autodm"
 	"sync"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -30,7 +31,6 @@ import (
 	"knative.dev/pkg/logging"
 	"knative.dev/pkg/reconciler"
 	sugarreconciler "knative.dev/sugar/pkg/reconciler"
-	"knative.dev/sugar/pkg/reconciler/autodm"
 )
 
 type runningController struct {

@@ -22,18 +22,18 @@ func (a *AutoDM) Do(ctx context.Context, cfg *sugared.Config, fn sugared.Realize
 	dms := make([]runtime.Object, 0)
 
 	if cfg.Sugared() {
-		apiVersion, kind := cfg.Sugar.Resource.GetGroupVersionKind().ToAPIVersionAndKind()
+		apiVersion, kind := cfg.Raw.Resource.GetGroupVersionKind().ToAPIVersionAndKind()
 		for key, value := range cfg.Annotations {
 
 			logging.FromContext(ctx).Info("working a sugared resource with k=v", key, "=", value)
 
 			dm := resources.MakeDomainMapping(&resources.DomainMappingArgs{
 				Name:  value,
-				Owner: cfg.Sugar.Resource,
+				Owner: cfg.Raw.Resource,
 				Ref: duckv1.KReference{
 					Kind:       kind,
-					Namespace:  cfg.Sugar.Resource.GetObjectMeta().GetNamespace(),
-					Name:       cfg.Sugar.Resource.GetObjectMeta().GetName(),
+					Namespace:  cfg.Raw.Resource.GetObjectMeta().GetNamespace(),
+					Name:       cfg.Raw.Resource.GetObjectMeta().GetName(),
 					APIVersion: apiVersion,
 				},
 			})
@@ -45,8 +45,8 @@ func (a *AutoDM) Do(ctx context.Context, cfg *sugared.Config, fn sugared.Realize
 
 	if err := fn(dms); err != nil {
 		logging.FromContext(ctx).Errorw("failed to realize domain maps",
-			zap.String("key", cfg.Sugar.Resource.GetObjectMeta().GetNamespace()+"/"+cfg.Sugar.Resource.GetObjectMeta().GetName()),
-			zap.String("gvk", cfg.Sugar.Resource.GetGroupVersionKind().String()),
+			zap.String("key", cfg.Raw.Resource.GetObjectMeta().GetNamespace()+"/"+cfg.Raw.Resource.GetObjectMeta().GetName()),
+			zap.String("gvk", cfg.Raw.Resource.GetGroupVersionKind().String()),
 			zap.Error(err))
 		return err
 	}
