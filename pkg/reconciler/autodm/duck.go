@@ -19,12 +19,14 @@ package autodm
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -39,7 +41,6 @@ import (
 	servinglistersv1alpha1 "knative.dev/serving/pkg/client/listers/serving/v1alpha1"
 	sugarreconciler "knative.dev/sugar/pkg/reconciler"
 	"knative.dev/sugar/pkg/sugared"
-	"time"
 )
 
 type Reconciler struct {
@@ -95,11 +96,11 @@ func (r *Reconciler) ReconcileSugar(ctx context.Context, s *sugared.Sugared) err
 	defer cancel()
 
 	if err := r.confectioner.Do(tctx, cfg, func(objects []runtime.Object) error {
+		// TODO: test all objects from the confectioner to confirm we have type meta.
 		// For any requested resource, create or update it.
 		for _, o := range objects {
-			dm := o.(*servingv1alpha1.DomainMapping)
-			if _, err := r.ensureDomainMapping(ctx, s.Resource, dm); err != nil {
-				logging.FromContext(ctx).Error("failed to ensure domain mapping", zap.Error(err))
+			if err := r.ensureResource(ctx, s.Resource, o); err != nil {
+				logging.FromContext(ctx).Error("failed to ensure resource", zap.Error(err))
 			}
 		}
 		// For any resource that exists but not requested, delete it.
@@ -139,48 +140,6 @@ func (r *Reconciler) ReconcileSugar(ctx context.Context, s *sugared.Sugared) err
 
 	<-tctx.Done() // Block until context is done.
 
-	//if cfg.Get() {
-	//	// TODO: here is where we are ready do call a DO on some thing that is making the confections.
-	//
-	//	// TODO: this is just logic for DomainMapping, will move out.
-	//	for k, v := range cfg.Annotations {
-	//		if _, err := r.ensureDomainMapping(ctx, cfg.Sugar, k, v); err != nil {
-	//			logging.FromContext(ctx).Error("failed to ensure domain mapping", zap.Error(err))
-	//		}
-	//	}
-	//}
-
-	//r.dc.Resource(gvr).Create(ctx)
-
-	// TODO: need to think of a way to work this into the confectioner, we might need to know of
-	// all the resources we should make based on the annotations, and then this controller makes them
-	// and then compares that list with what already exists and clean that list up. Then
-	//// the confectioner is not responsible for creating any resources directly.
-	//
-	//// Look for deleted annotations.
-	//if dms, err := r.findDomainMappingsForOwner(s.Resource); err != nil {
-	//	logging.FromContext(ctx).Debug("failed to get list domain mappings for addressable", zap.Error(err))
-	//} else {
-	//	// Compare the annotations we know are on the addressable to the existing domain mappings that are owned by
-	//	// this addressable. We want to delete the ones that exist and are no longer annotated.
-	//	for _, dm := range dms {
-	//		found := false
-	//		for k, v := range cfg.Annotations {
-	//			if hasHint(ctx, dm, k) {
-	//				if dm.Name == v {
-	//					found = true
-	//				}
-	//				break
-	//			}
-	//		}
-	//		if !found {
-	//			logging.FromContext(ctx).Info("did not find the domain map in the annotations, deleting.", zap.String("domainmapping", dm.Namespace+"/"+dm.Name))
-	//			if err := r.client.ServingV1alpha1().DomainMappings(dm.Namespace).Delete(ctx, dm.Name, metav1.DeleteOptions{}); err != nil {
-	//				logging.FromContext(ctx).Info("failed to delete a domain mapping", zap.String("domainmapping", dm.Namespace+"/"+dm.Name), zap.Error(err))
-	//			}
-	//		}
-	//	}
-	//}
 	return nil
 }
 
@@ -196,29 +155,53 @@ func hasHint(ctx context.Context, resource kmeta.OwnerRefable, expected string) 
 	return value == expected
 }
 
-// TODO: move this out to the domain map Confectioner
-func (r *Reconciler) ensureDomainMapping(ctx context.Context, owner kmeta.OwnerRefable, dm *servingv1alpha1.DomainMapping) (*servingv1alpha1.DomainMapping, error) {
-	//recorder := controller.GetEventRecorder(ctx)
-
-	// TODO: remove sugar hint from the resource creation and add it here.
-
-	existing, err := r.domainMappingLister.DomainMappings(dm.Namespace).Get(dm.Name)
+func (r *Reconciler) ensureResource(ctx context.Context, owner kmeta.OwnerRefable, obj runtime.Object) error {
+	gvr, _ := meta.UnsafeGuessKindToResource(obj.GetObjectKind().GroupVersionKind())
+	us, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+	if err != nil {
+		return err
+	}
+	resource := &unstructured.Unstructured{Object: us}
+	existing, err := r.dc.Resource(gvr).Namespace(resource.GetNamespace()).Get(ctx, resource.GetName(), metav1.GetOptions{})
 	if apierrs.IsNotFound(err) {
-		dm, err = r.createDomainMapping(ctx, dm)
+		_, err = r.dc.Resource(gvr).Namespace(resource.GetNamespace()).Create(ctx, resource, metav1.CreateOptions{})
 		if err != nil {
 			//recorder.Eventf(addr, corev1.EventTypeWarning, "CreationFailed", "Failed to create DomainMapping %q: %v", value, err)
-			return nil, fmt.Errorf("failed to create DomainMapping: %w", err)
+			return fmt.Errorf("failed to create resource: %w", err)
 		}
 		//recorder.Eventf(addr, corev1.EventTypeNormal, "Created", "Created DomainMapping %q", value)
 	} else if err != nil {
-		return nil, fmt.Errorf("failed to get DomainMapping: %w", err)
+		return fmt.Errorf("failed to get DomainMapping: %w", err)
 	} else if !metav1.IsControlledBy(existing, owner.GetObjectMeta()) {
-		return nil, fmt.Errorf("addressable[%s]: %q does not own domain mapping: %q", owner.GetGroupVersionKind().Kind, owner.GetObjectMeta().GetName(), existing.Name)
-	} else if dm, err = r.reconcileDomainMapping(ctx, dm, existing); err != nil {
-		return nil, fmt.Errorf("failed to reconcile DomainMapping: %w", err)
+		return fmt.Errorf("addressable[%s]: %q does not own domain mapping: %q", owner.GetGroupVersionKind().Kind, owner.GetObjectMeta().GetName(), existing.GetName())
+	} else if err = r.reconcileResource(ctx, gvr, resource, existing); err != nil {
+		return fmt.Errorf("failed to reconcile DomainMapping: %w", err)
 	}
-	return dm, nil
+	return nil
 }
+
+//func (r *Reconciler) ensureDomainMapping(ctx context.Context, owner kmeta.OwnerRefable, dm *servingv1alpha1.DomainMapping) (*servingv1alpha1.DomainMapping, error) {
+//	//recorder := controller.GetEventRecorder(ctx)
+//
+//	// TODO: remove sugar hint from the resource creation and add it here.
+//
+//	existing, err := r.domainMappingLister.DomainMappings(dm.Namespace).Get(dm.Name)
+//	if apierrs.IsNotFound(err) {
+//		dm, err = r.createDomainMapping(ctx, dm)
+//		if err != nil {
+//			//recorder.Eventf(addr, corev1.EventTypeWarning, "CreationFailed", "Failed to create DomainMapping %q: %v", value, err)
+//			return nil, fmt.Errorf("failed to create DomainMapping: %w", err)
+//		}
+//		//recorder.Eventf(addr, corev1.EventTypeNormal, "Created", "Created DomainMapping %q", value)
+//	} else if err != nil {
+//		return nil, fmt.Errorf("failed to get DomainMapping: %w", err)
+//	} else if !metav1.IsControlledBy(existing, owner.GetObjectMeta()) {
+//		return nil, fmt.Errorf("addressable[%s]: %q does not own domain mapping: %q", owner.GetGroupVersionKind().Kind, owner.GetObjectMeta().GetName(), existing.Name)
+//	} else if dm, err = r.reconcileDomainMapping(ctx, dm, existing); err != nil {
+//		return nil, fmt.Errorf("failed to reconcile DomainMapping: %w", err)
+//	}
+//	return dm, nil
+//}
 
 func (r *Reconciler) findKindsForOwner(ctx context.Context, owner kmeta.OwnerRefable) ([]kmeta.OwnerRefable, error) {
 	s, err := r.sugarDispenser.List(ctx, owner.GetObjectMeta().GetNamespace(), r.confectioner.Kinds())
@@ -244,73 +227,94 @@ func (r *Reconciler) findKindsForOwner(ctx context.Context, owner kmeta.OwnerRef
 	return owned, nil
 }
 
-func (r *Reconciler) findDomainMappingsForOwner(addr kmeta.OwnerRefable) ([]*servingv1alpha1.DomainMapping, error) {
-	selector, err := labels.Parse(fmt.Sprintf("%s=%s", sugarreconciler.SugarOwnerLabelKey, sugarreconciler.AutoDomainMappingLabel))
-	if err != nil {
-		return nil, fmt.Errorf("failed to produce label selector: %w", err)
-	}
-
-	dms, err := r.domainMappingLister.DomainMappings(addr.GetObjectMeta().GetNamespace()).List(selector)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list DomainMapping: %w", err)
-	}
-
-	apiVersion, kind := addr.GetGroupVersionKind().ToAPIVersionAndKind()
-
-	// Filter for the owner.
-	ownedDMs := make([]*servingv1alpha1.DomainMapping, 0)
-	for _, dm := range dms {
-		owner := metav1.GetControllerOf(dm)
-		if owner != nil &&
-			owner.APIVersion == apiVersion &&
-			owner.Kind == kind &&
-			owner.Name == addr.GetObjectMeta().GetName() &&
-			dm.Namespace == addr.GetObjectMeta().GetNamespace() {
-			ownedDMs = append(ownedDMs, dm)
-		}
-
-	}
-	return ownedDMs, nil
-}
-
-func (r *Reconciler) reconcileDomainMapping(ctx context.Context, desired, existing *servingv1alpha1.DomainMapping) (*servingv1alpha1.DomainMapping, error) {
-	existing = existing.DeepCopy()
-	// In the case of an upgrade, there can be default values set that don't exist pre-upgrade.
-	// We are setting the up-to-date default values here so an update won't be triggered if the only
-	// diff is the new default values.
-	existing.SetDefaults(ctx)
-
+func (r *Reconciler) reconcileResource(ctx context.Context, gvr schema.GroupVersionResource, desired, existing *unstructured.Unstructured) error {
 	// merge the labels and annotations.
-	joinNewKeys(desired.Labels, existing.Labels)
-	joinNewKeys(desired.Annotations, existing.Annotations)
+	desired.SetLabels(joinNewKeys(desired.GetLabels(), existing.GetLabels()))
+	desired.SetAnnotations(joinNewKeys(desired.GetAnnotations(), existing.GetAnnotations()))
 
-	equals, err := domainMappingSemanticEquals(ctx, desired, existing)
+	equals, err := unstructuredSemanticEquals(ctx, desired, existing)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if equals {
-		return existing, nil
+		return nil
 	}
 
 	// Preserve the rest of the object (e.g. ObjectMeta except for labels and annotations).
-	existing.Spec = desired.Spec
+	unstructuredSetSpec(existing, unstructuredGetSpec(desired))
+	existing.SetAnnotations(desired.GetAnnotations())
+	existing.SetLabels(desired.GetLabels())
 
-	return r.client.ServingV1alpha1().DomainMappings(existing.Namespace).Update(ctx, existing, metav1.UpdateOptions{})
+	_, err = r.dc.Resource(gvr).Namespace(existing.GetNamespace()).Update(ctx, existing, metav1.UpdateOptions{})
+	return err
 }
 
-func domainMappingSemanticEquals(ctx context.Context, desired, observed *servingv1alpha1.DomainMapping) (bool, error) {
+//func (r *Reconciler) reconcileDomainMapping(ctx context.Context, desired, existing *servingv1alpha1.DomainMapping) (*servingv1alpha1.DomainMapping, error) {
+//	existing = existing.DeepCopy()
+//	// In the case of an upgrade, there can be default values set that don't exist pre-upgrade.
+//	// We are setting the up-to-date default values here so an update won't be triggered if the only
+//	// diff is the new default values.
+//	existing.SetDefaults(ctx)
+//
+//	// merge the labels and annotations.
+//	joinNewKeys(desired.Labels, existing.Labels)
+//	joinNewKeys(desired.Annotations, existing.Annotations)
+//
+//	equals, err := domainMappingSemanticEquals(ctx, desired, existing)
+//	if err != nil {
+//		return nil, err
+//	}
+//	if equals {
+//		return existing, nil
+//	}
+//
+//	// Preserve the rest of the object (e.g. ObjectMeta except for labels and annotations).
+//	existing.Spec = desired.Spec
+//
+//	return r.client.ServingV1alpha1().DomainMappings(existing.Namespace).Update(ctx, existing, metav1.UpdateOptions{})
+//}
+//
+//func domainMappingSemanticEquals(ctx context.Context, desired, observed *servingv1alpha1.DomainMapping) (bool, error) {
+//	logger := logging.FromContext(ctx)
+//	specDiff, err := kmp.SafeDiff(desired.Spec, observed.Spec)
+//	if err != nil {
+//		logger.Errorw("Error diffing domain mapping spec", zap.Error(err))
+//		return false, fmt.Errorf("failed to diff DomanMapping: %w", err)
+//	} else if specDiff != "" {
+//		logger.Info("Reconciling domain mapping diff (-desired, +observed):\n", specDiff)
+//	}
+//	return equality.Semantic.DeepEqual(desired.Spec, observed.Spec) &&
+//		equality.Semantic.DeepEqual(desired.Labels, observed.Labels) &&
+//		equality.Semantic.DeepEqual(desired.Annotations, observed.Annotations) &&
+//		specDiff == "", nil
+//}
+//
+func unstructuredSemanticEquals(ctx context.Context, desired, observed *unstructured.Unstructured) (bool, error) {
 	logger := logging.FromContext(ctx)
-	specDiff, err := kmp.SafeDiff(desired.Spec, observed.Spec)
+	specDiff, err := kmp.SafeDiff(unstructuredGetSpec(desired), unstructuredGetSpec(observed))
 	if err != nil {
-		logger.Errorw("Error diffing domain mapping spec", zap.Error(err))
-		return false, fmt.Errorf("failed to diff DomanMapping: %w", err)
+		logger.Errorw("Error diffing Unstructured spec", zap.Error(err))
+		return false, fmt.Errorf("failed to diff Unstructured: %w", err)
 	} else if specDiff != "" {
-		logger.Info("Reconciling domain mapping diff (-desired, +observed):\n", specDiff)
+		logger.Info("Reconciling Unstructured diff (-desired, +observed):\n", specDiff)
 	}
-	return equality.Semantic.DeepEqual(desired.Spec, observed.Spec) &&
-		equality.Semantic.DeepEqual(desired.Labels, observed.Labels) &&
-		equality.Semantic.DeepEqual(desired.Annotations, observed.Annotations) &&
+	return equality.Semantic.DeepEqual(unstructuredGetSpec(desired), unstructuredGetSpec(observed)) &&
+		equality.Semantic.DeepEqual(desired.GetLabels(), observed.GetLabels()) &&
+		equality.Semantic.DeepEqual(desired.GetAnnotations(), observed.GetAnnotations()) &&
 		specDiff == "", nil
+}
+
+func unstructuredGetSpec(u *unstructured.Unstructured) map[string]interface{} {
+	m, _, _ := unstructured.NestedMap(u.Object, "spec")
+	return m
+}
+
+func unstructuredSetSpec(u *unstructured.Unstructured, spec map[string]interface{}) {
+	if spec == nil {
+		unstructured.RemoveNestedField(u.Object, "spec")
+		return
+	}
+	unstructured.SetNestedMap(u.Object, spec, "spec")
 }
 
 func (r *Reconciler) createDomainMapping(ctx context.Context, dm *servingv1alpha1.DomainMapping) (*servingv1alpha1.DomainMapping, error) {
@@ -348,12 +352,13 @@ func (r *Reconciler) createDomainMapping(ctx context.Context, dm *servingv1alpha
 //	return original, nil
 //}
 //
-func joinNewKeys(main, add map[string]string) {
+func joinNewKeys(main, add map[string]string) map[string]string {
 	for k, v := range add {
 		if _, found := main[k]; !found {
 			main[k] = v
 		}
 	}
+	return main
 }
 
 //

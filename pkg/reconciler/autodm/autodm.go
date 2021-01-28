@@ -24,6 +24,9 @@ func (a *AutoDM) Do(ctx context.Context, cfg *sugared.Config, fn sugared.Realize
 	if cfg.Sugared() {
 		apiVersion, kind := cfg.Sugar.Resource.GetGroupVersionKind().ToAPIVersionAndKind()
 		for key, value := range cfg.Annotations {
+
+			logging.FromContext(ctx).Info("working a sugared resource with k=v", key, "=", value)
+
 			dms = append(dms, resources.MakeDomainMapping(&resources.DomainMappingArgs{
 				Name:  value,
 				Hint:  key,

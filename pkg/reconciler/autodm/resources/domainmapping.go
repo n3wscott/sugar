@@ -35,7 +35,13 @@ type DomainMappingArgs struct {
 
 // MakeDomainMapping
 func MakeDomainMapping(args *DomainMappingArgs) *servingv1alpha1.DomainMapping {
+	apiVersion, kind := servingv1alpha1.SchemeGroupVersion.WithKind("DomainMapping").ToAPIVersionAndKind()
+
 	return &servingv1alpha1.DomainMapping{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       kind,
+			APIVersion: apiVersion,
+		},
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: args.Owner.GetObjectMeta().GetNamespace(),
 			Name:      args.Name,
