@@ -20,29 +20,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime"
-	sugarreconciler "knative.dev/sugar/pkg/reconciler"
-	"strings"
 
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/cache"
 	discoverylistersv1alpha1 "knative.dev/discovery/pkg/client/listers/discovery/v1alpha1"
 	"knative.dev/pkg/apis/duck"
 	"knative.dev/pkg/kmeta"
 	"knative.dev/pkg/logging"
+	sugarreconciler "knative.dev/sugar/pkg/reconciler"
 )
 
-type RealizeFn func([]runtime.Object) error
-
-type Confectioner interface {
-	Do(ctx context.Context, cfg *Config, fn RealizeFn) error
-	Kinds() []schema.GroupVersionKind
-}
-
-type SugarDispenser struct {
+type Dispenser struct {
 	prefix          string
 	owner           string
 	informerFactory duck.InformerFactory
@@ -52,24 +43,24 @@ type SugarDispenser struct {
 	duckTypeVersion string
 }
 
-func (sd *SugarDispenser) getLister(ctx context.Context, gvk schema.GroupVersionKind) (cache.GenericLister, error) {
-	lister, found := sd.listers[gvk.String()]
+func (d *Dispenser) getLister(ctx context.Context, gvk schema.GroupVersionKind) (cache.GenericLister, error) {
+	lister, found := d.listers[gvk.String()]
 	if !found {
 		gvr, _ := meta.UnsafeGuessKindToResource(gvk)
-		_, l, err := sd.informerFactory.Get(ctx, gvr)
+		_, l, err := d.informerFactory.Get(ctx, gvr)
 		if err != nil {
 			return nil, err
 		}
 		lister = l
-		sd.listers[gvk.String()] = l
+		d.listers[gvk.String()] = l
 	}
 	return lister, nil
 }
 
-func (sd *SugarDispenser) List(ctx context.Context, namespace string, gvks []schema.GroupVersionKind) ([]*Turbinado, error) {
+func (d *Dispenser) List(ctx context.Context, namespace string, gvks []schema.GroupVersionKind) ([]*Turbinado, error) {
 	all := make([]*Turbinado, 0)
 	for _, gvk := range gvks {
-		s, err := sd.list(ctx, namespace, gvk)
+		s, err := d.list(ctx, namespace, gvk)
 		if err != nil {
 			return nil, err
 		}
@@ -78,13 +69,13 @@ func (sd *SugarDispenser) List(ctx context.Context, namespace string, gvks []sch
 	return all, nil
 }
 
-func (sd *SugarDispenser) list(ctx context.Context, namespace string, gvk schema.GroupVersionKind) ([]*Turbinado, error) {
+func (d *Dispenser) list(ctx context.Context, namespace string, gvk schema.GroupVersionKind) ([]*Turbinado, error) {
 	selector, err := labels.Parse(fmt.Sprintf("%s=%s", sugarreconciler.SugarOwnerLabelKey, sugarreconciler.AutoDomainMappingLabel))
 	if err != nil {
 		return nil, fmt.Errorf("failed to produce label selector: %w", err)
 	}
 
-	lister, err := sd.getLister(ctx, gvk)
+	lister, err := d.getLister(ctx, gvk)
 	if err != nil {
 		return nil, err
 	}
@@ -106,14 +97,14 @@ func (sd *SugarDispenser) list(ctx context.Context, namespace string, gvk schema
 
 		s = append(s, &Turbinado{
 			Resource: resource,
-			Prefix:   sd.prefix,
+			Prefix:   d.prefix,
 		})
 	}
 	return s, nil
 }
 
-func (sd *SugarDispenser) Get(ctx context.Context, namespace, name string, gvk schema.GroupVersionKind) (*Turbinado, error) {
-	lister, err := sd.getLister(ctx, gvk)
+func (d *Dispenser) Get(ctx context.Context, namespace, name string, gvk schema.GroupVersionKind) (*Turbinado, error) {
+	lister, err := d.getLister(ctx, gvk)
 	if err != nil {
 		return nil, err
 	}
@@ -133,19 +124,19 @@ func (sd *SugarDispenser) Get(ctx context.Context, namespace, name string, gvk s
 
 	return &Turbinado{
 		Resource: resource,
-		Prefix:   sd.prefix,
+		Prefix:   d.prefix,
 	}, nil
 }
 
-func (sd *SugarDispenser) IsDuck(ctx context.Context, gvk schema.GroupVersionKind) bool {
+func (d *Dispenser) IsDuck(ctx context.Context, gvk schema.GroupVersionKind) bool {
 	key := fmt.Sprintf("%s.%s", gvk.Kind, gvk.Group)
 
-	if dt, err := sd.duckTypeLister.Get(sd.duckTypeName); err != nil {
-		logging.FromContext(ctx).Errorw("failed to get cluster duck type for "+sd.duckTypeName, zap.Error(err))
+	if dt, err := d.duckTypeLister.Get(d.duckTypeName); err != nil {
+		logging.FromContext(ctx).Errorw("failed to get cluster duck type for "+d.duckTypeName, zap.Error(err))
 		return false
 	} else {
 		// Build a lookup table without version.
-		for _, v := range dt.Status.Ducks[sd.duckTypeVersion] {
+		for _, v := range dt.Status.Ducks[d.duckTypeVersion] {
 			if key == fmt.Sprintf("%s.%s", v.Kind, v.Group()) {
 				return true
 			}
@@ -158,24 +149,24 @@ func (sd *SugarDispenser) IsDuck(ctx context.Context, gvk schema.GroupVersionKin
 // OwnerSugaredDuckConfig will return the config of the owner of the sugared resource.
 // For now, we will only look up one level in the owners graph.
 // TODO: rename?
-func (sd *SugarDispenser) OwnerSugaredDuckConfig(ctx context.Context, sugared *Turbinado) (*Config, bool) {
+func (d *Dispenser) OwnerSugaredDuckConfig(ctx context.Context, sugared *Turbinado) (*Config, bool) {
 	// TODO: we could filter by Owner Controller.
 	for _, owner := range sugared.Resource.GetObjectMeta().GetOwnerReferences() {
 		gvk := schema.FromAPIVersionAndKind(owner.APIVersion, owner.Kind)
 		// First, check if the owner is a duck.
-		if !sd.IsDuck(ctx, gvk) {
+		if !d.IsDuck(ctx, gvk) {
 			// If the owner is not a duck, we can skip looking at it further.
 			continue
 		}
 
 		// Second, check if that owner is sugared.
-		so, err := sd.Get(ctx, sugared.Resource.GetObjectMeta().GetNamespace(), owner.Name, gvk)
+		t, err := d.Get(ctx, sugared.Resource.GetObjectMeta().GetNamespace(), owner.Name, gvk)
 		if err != nil {
 			logging.FromContext(ctx).Errorw("failed to get sugared owner ", owner.Name,
 				zap.String("gvk", gvk.String()), zap.Error(err))
 			return nil, false
 		}
-		cfg := so.Config()
+		cfg := t.Config()
 		if cfg.Sugared() {
 			return cfg, true
 		}
@@ -183,64 +174,4 @@ func (sd *SugarDispenser) OwnerSugaredDuckConfig(ctx context.Context, sugared *T
 		// but this will require a curricular loop detection.
 	}
 	return nil, false
-}
-
-type Turbinado struct {
-	Resource kmeta.OwnerRefable
-	Prefix   string
-}
-
-type Config struct {
-	Raw         *Turbinado
-	Annotations map[string]string
-	Labels      map[string]string
-}
-
-func (s *Turbinado) Config() *Config {
-	// prefix[extras] = values  ---> hint = prefix+extras
-
-	annotations := make(map[string]string)
-	for k, value := range s.Resource.GetObjectMeta().GetAnnotations() {
-		if strings.HasPrefix(k, s.Prefix) {
-			key := strings.TrimPrefix(k, s.Prefix)
-			annotations[key] = value
-		}
-	}
-
-	lbs := make(map[string]string)
-	for k, value := range s.Resource.GetObjectMeta().GetLabels() {
-		if strings.HasPrefix(k, s.Prefix) {
-			key := strings.TrimPrefix(k, s.Prefix)
-			annotations[key] = value
-		}
-	}
-
-	return &Config{
-		Raw:         s,
-		Annotations: annotations,
-		Labels:      lbs,
-	}
-}
-
-func (c *Config) Hint() string {
-	return c.Raw.Prefix + ".hint"
-}
-
-func (c *Config) ApplyHint(resource kmeta.OwnerRefable, hint string) {
-	a := resource.GetObjectMeta().GetAnnotations()
-	a[c.Hint()] = hint
-	resource.GetObjectMeta().SetAnnotations(a)
-}
-
-func (c *Config) Subtract(sub *Config) {
-	for k, _ := range sub.Annotations {
-		delete(c.Annotations, k)
-	}
-	for k, _ := range sub.Labels {
-		delete(c.Labels, k)
-	}
-}
-
-func (c *Config) Sugared() bool {
-	return len(c.Annotations) > 0 || len(c.Labels) > 0
 }

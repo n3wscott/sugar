@@ -41,7 +41,7 @@ type Reconciler struct {
 	Dynamic        dynamic.Interface
 	GVK            schema.GroupVersionKind
 	Confectioner   sugared.Confectioner
-	SugarDispenser *sugared.SugarDispenser
+	SugarDispenser *sugared.Dispenser
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, key string) error {
