@@ -13,3 +13,19 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
+package sugared
+
+import (
+	"context"
+
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+type RealizeFn func([]runtime.Object) error
+
+type Confectioner interface {
+	Do(ctx context.Context, cfg *Config, fn RealizeFn) error
+	Kinds() []schema.GroupVersionKind
+}

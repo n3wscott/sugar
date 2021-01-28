@@ -1,5 +1,5 @@
 /*
-Copyright 2020 The Knative Authors
+Copyright 2021 The Knative Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,6 +18,10 @@ package autodm
 
 import (
 	"context"
+	"knative.dev/pkg/injection/clients/dynamicclient"
+	"knative.dev/sugar/pkg/reconciler"
+	"knative.dev/sugar/pkg/reconciler/sugarduck"
+	"knative.dev/sugar/pkg/sugared"
 
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -29,15 +33,13 @@ import (
 	"knative.dev/pkg/injection"
 	"knative.dev/pkg/logging"
 
-	clusterducktypeinformer "knative.dev/discovery/pkg/client/injection/informers/discovery/v1alpha1/clusterducktype"
 	addressaleinformer "knative.dev/pkg/client/injection/ducks/duck/v1/addressable"
-	servingclient "knative.dev/serving/pkg/client/injection/client"
 	domainmappinginformer "knative.dev/serving/pkg/client/injection/informers/serving/v1alpha1/domainmapping"
 )
 
 const (
 	// ReconcilerName is the name of the reconciler.
-	ReconcilerName = "Addressables"
+	ReconcilerName = "SugarDuck"
 )
 
 // NewController returns a function that initializes the controller and
@@ -50,21 +52,22 @@ func NewController(gvk schema.GroupVersionKind) injection.ControllerConstructor 
 		addressableduckInformer := addressaleinformer.Get(ctx)
 		domainMapInformer := domainmappinginformer.Get(ctx)
 		gvr, _ := meta.UnsafeGuessKindToResource(gvk)
-		addressableInformer, addressableLister, err := addressableduckInformer.Get(ctx, gvr)
+		addressableInformer, _, err := addressableduckInformer.Get(ctx, gvr)
 		if err != nil {
 			logger.Errorw("Error getting source informer", zap.String("GVR", gvr.String()), zap.Error(err))
 			return nil
 		}
-		cdtInformer := clusterducktypeinformer.Get(ctx)
 
-		r := &Reconciler{
-			addressableDuckInformer: addressableduckInformer,
-			addressableLister:       addressableLister,
-			domainMappingLister:     domainMapInformer.Lister(),
-			gvr:                     gvr,
-			cdtLister:               cdtInformer.Lister(),
-			ownerListers:            make(map[string]cache.GenericLister),
-			client:                  servingclient.Get(ctx),
+		sugarDispenser := sugared.NewDispenser(ctx,
+			reconciler.Addressables, reconciler.AddressablesVersion, // Duck type
+			reconciler.DomainMappingAnnotationKey, reconciler.AutoDomainMappingLabel, // Sugar
+			addressableduckInformer)
+
+		r := &sugarduck.Reconciler{
+			GVK:            gvk,
+			SugarDispenser: sugarDispenser,
+			Confectioner:   NewAutoDM(),
+			Dynamic:        dynamicclient.Get(ctx),
 		}
 		impl := controller.NewImplFull(r, controller.ControllerOptions{WorkQueueName: ReconcilerName + gvr.String(), Logger: logger})
 
