@@ -208,7 +208,7 @@ func (s *Sugared) Config() *Config {
 		}
 	}
 
-	labels := make(map[string]string)
+	lbs := make(map[string]string)
 	for k, value := range s.Resource.GetObjectMeta().GetLabels() {
 		if strings.HasPrefix(k, s.Prefix) {
 			key := strings.TrimPrefix(k, s.Prefix)
@@ -219,8 +219,18 @@ func (s *Sugared) Config() *Config {
 	return &Config{
 		Sugar:       s,
 		Annotations: annotations,
-		Labels:      labels,
+		Labels:      lbs,
 	}
+}
+
+func (c *Config) Hint() string {
+	return c.Sugar.Prefix + ".hint"
+}
+
+func (c *Config) ApplyHint(resource kmeta.OwnerRefable, hint string) {
+	a := resource.GetObjectMeta().GetAnnotations()
+	a[c.Hint()] = hint
+	resource.GetObjectMeta().SetAnnotations(a)
 }
 
 func (c *Config) Subtract(sub *Config) {

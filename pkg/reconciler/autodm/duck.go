@@ -97,6 +97,7 @@ func (r *Reconciler) ReconcileSugar(ctx context.Context, s *sugared.Sugared) err
 
 	if err := r.confectioner.Do(tctx, cfg, func(objects []runtime.Object) error {
 		// TODO: test all objects from the confectioner to confirm we have type meta.
+		// TODO: test that all objects from confectioner has hints.
 		// For any requested resource, create or update it.
 		for _, o := range objects {
 			if err := r.ensureResource(ctx, s.Resource, o); err != nil {

@@ -28,7 +28,6 @@ import (
 // DomainMappingArgs
 type DomainMappingArgs struct {
 	Name  string
-	Hint  string
 	Owner kmeta.OwnerRefable
 	Ref   duckv1.KReference
 }
@@ -49,7 +48,7 @@ func MakeDomainMapping(args *DomainMappingArgs) *servingv1alpha1.DomainMapping {
 				*kmeta.NewControllerRef(args.Owner),
 			},
 			Labels:      DomainMappingLabels(),
-			Annotations: DomainMappingAnnotations(args.Hint),
+			Annotations: DomainMappingAnnotations(),
 		},
 		Spec: servingv1alpha1.DomainMappingSpec{
 			Ref: args.Ref,
@@ -65,8 +64,6 @@ func DomainMappingLabels() map[string]string {
 }
 
 // DomainMappingAnnotations
-func DomainMappingAnnotations(hint string) map[string]string {
-	return map[string]string{
-		reconciler.DomainMappingHintAnnotationKey: hint,
-	}
+func DomainMappingAnnotations() map[string]string {
+	return map[string]string{}
 }

@@ -27,9 +27,8 @@ func (a *AutoDM) Do(ctx context.Context, cfg *sugared.Config, fn sugared.Realize
 
 			logging.FromContext(ctx).Info("working a sugared resource with k=v", key, "=", value)
 
-			dms = append(dms, resources.MakeDomainMapping(&resources.DomainMappingArgs{
+			dm := resources.MakeDomainMapping(&resources.DomainMappingArgs{
 				Name:  value,
-				Hint:  key,
 				Owner: cfg.Sugar.Resource,
 				Ref: duckv1.KReference{
 					Kind:       kind,
@@ -37,7 +36,10 @@ func (a *AutoDM) Do(ctx context.Context, cfg *sugared.Config, fn sugared.Realize
 					Name:       cfg.Sugar.Resource.GetObjectMeta().GetName(),
 					APIVersion: apiVersion,
 				},
-			}))
+			})
+			// Apply the hint so we can find the index again.
+			cfg.ApplyHint(dm, key)
+			dms = append(dms, dm)
 		}
 	}
 
