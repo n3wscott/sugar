@@ -24,11 +24,12 @@ import (
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/cache"
 	discoverylistersv1alpha1 "knative.dev/discovery/pkg/client/listers/discovery/v1alpha1"
 	"knative.dev/pkg/apis/duck"
-	duckv1 "knative.dev/pkg/apis/duck/v1"
 	"knative.dev/pkg/kmeta"
 	"knative.dev/pkg/kmp"
 	"knative.dev/pkg/logging"
@@ -36,8 +37,8 @@ import (
 	clientset "knative.dev/serving/pkg/client/clientset/versioned"
 	servinglistersv1alpha1 "knative.dev/serving/pkg/client/listers/serving/v1alpha1"
 	sugarreconciler "knative.dev/sugar/pkg/reconciler"
-	"knative.dev/sugar/pkg/reconciler/autodm/resources"
 	"knative.dev/sugar/pkg/sugared"
+	"time"
 )
 
 type Reconciler struct {
@@ -56,6 +57,9 @@ type Reconciler struct {
 	ownerListers map[string]cache.GenericLister
 
 	sugarDispenser *sugared.SugarDispenser
+	dc             dynamic.Interface
+
+	confectioner sugared.Confectioner
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, key string) error {
@@ -80,57 +84,98 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string) error {
 }
 
 func (r *Reconciler) ReconcileSugar(ctx context.Context, s *sugared.Sugared) error {
-	ownerCfg, ownerSugared := r.sugarDispenser.OwnerSugaredDuckConfig(ctx, s)
-
-	// the following code looks at the owners and collects their sugar annotations, and then
-	// as we find annotations that do not exist on the
-
 	cfg := s.Config()
-
+	ownerCfg, ownerSugared := r.sugarDispenser.OwnerSugaredDuckConfig(ctx, s)
 	if ownerSugared {
 		cfg.Subtract(ownerCfg)
 	}
 
-	if cfg.Sugared() {
-		// TODO: here is where we are ready do call a DO on some thing that is making the confections.
+	tctx, cancel := context.WithTimeout(ctx, time.Second*3) // TODO: idk, let's try out a static timeout.
+	defer cancel()
 
-		// TODO: this is just logic for DomainMapping, will move out.
-		for k, v := range cfg.Annotations {
-			if _, err := r.ensureDomainMapping(ctx, cfg.Sugar, k, v); err != nil {
+	if err := r.confectioner.Do(tctx, cfg, func(objects []runtime.Object) error {
+		// TODO:
+		// For any requested resource, create or update it.
+		for _, o := range objects {
+			dm := o.(*servingv1alpha1.DomainMapping)
+			if _, err := r.ensureDomainMapping(ctx, s.Resource, dm); err != nil {
 				logging.FromContext(ctx).Error("failed to ensure domain mapping", zap.Error(err))
 			}
 		}
+		// For any resource that exists but not requested, delete it.
+		if dms, err := r.findDomainMappingsForOwner(s.Resource); err != nil {
+			logging.FromContext(ctx).Debug("failed to get list domain mappings for addressable", zap.Error(err))
+		} else {
+			// Compare the annotations we know are on the addressable to the existing domain mappings that are owned by
+			// this addressable. We want to delete the ones that exist and are no longer annotated.
+			for _, dm := range dms {
+				found := false
+				for k, v := range cfg.Annotations {
+					if hasHint(ctx, dm, k) {
+						if dm.Name == v {
+							found = true
+						}
+						break
+					}
+				}
+				if !found {
+					logging.FromContext(ctx).Info("did not find the domain map in the annotations, deleting.", zap.String("domainmapping", dm.Namespace+"/"+dm.Name))
+					if err := r.client.ServingV1alpha1().DomainMappings(dm.Namespace).Delete(ctx, dm.Name, metav1.DeleteOptions{}); err != nil {
+						logging.FromContext(ctx).Info("failed to delete a domain mapping", zap.String("domainmapping", dm.Namespace+"/"+dm.Name), zap.Error(err))
+					}
+				}
+			}
+		}
+		cancel()
+		return nil
+	}); err != nil {
+		logging.FromContext(ctx).Errorw("failed to invoke confectioner", zap.Error(err))
 	}
+
+	<-tctx.Done() // Block until context is done.
+
+	//if cfg.Sugared() {
+	//	// TODO: here is where we are ready do call a DO on some thing that is making the confections.
+	//
+	//	// TODO: this is just logic for DomainMapping, will move out.
+	//	for k, v := range cfg.Annotations {
+	//		if _, err := r.ensureDomainMapping(ctx, cfg.Sugar, k, v); err != nil {
+	//			logging.FromContext(ctx).Error("failed to ensure domain mapping", zap.Error(err))
+	//		}
+	//	}
+	//}
+
+	//r.dc.Resource(gvr).Create(ctx)
 
 	// TODO: need to think of a way to work this into the confectioner, we might need to know of
 	// all the resources we should make based on the annotations, and then this controller makes them
 	// and then compares that list with what already exists and clean that list up. Then
-	// the confectioner is not responsible for creating any resources directly.
-
-	// Look for deleted annotations.
-	if dms, err := r.findDomainMappingsForOwner(s.Resource); err != nil {
-		logging.FromContext(ctx).Debug("failed to get list domain mappings for addressable", zap.Error(err))
-	} else {
-		// Compare the annotations we know are on the addressable to the existing domain mappings that are owned by
-		// this addressable. We want to delete the ones that exist and are no longer annotated.
-		for _, dm := range dms {
-			found := false
-			for k, v := range cfg.Annotations {
-				if hasHint(ctx, dm, k) {
-					if dm.Name == v {
-						found = true
-					}
-					break
-				}
-			}
-			if !found {
-				logging.FromContext(ctx).Info("did not find the domain map in the annotations, deleting.", zap.String("domainmapping", dm.Namespace+"/"+dm.Name))
-				if err := r.client.ServingV1alpha1().DomainMappings(dm.Namespace).Delete(ctx, dm.Name, metav1.DeleteOptions{}); err != nil {
-					logging.FromContext(ctx).Info("failed to delete a domain mapping", zap.String("domainmapping", dm.Namespace+"/"+dm.Name), zap.Error(err))
-				}
-			}
-		}
-	}
+	//// the confectioner is not responsible for creating any resources directly.
+	//
+	//// Look for deleted annotations.
+	//if dms, err := r.findDomainMappingsForOwner(s.Resource); err != nil {
+	//	logging.FromContext(ctx).Debug("failed to get list domain mappings for addressable", zap.Error(err))
+	//} else {
+	//	// Compare the annotations we know are on the addressable to the existing domain mappings that are owned by
+	//	// this addressable. We want to delete the ones that exist and are no longer annotated.
+	//	for _, dm := range dms {
+	//		found := false
+	//		for k, v := range cfg.Annotations {
+	//			if hasHint(ctx, dm, k) {
+	//				if dm.Name == v {
+	//					found = true
+	//				}
+	//				break
+	//			}
+	//		}
+	//		if !found {
+	//			logging.FromContext(ctx).Info("did not find the domain map in the annotations, deleting.", zap.String("domainmapping", dm.Namespace+"/"+dm.Name))
+	//			if err := r.client.ServingV1alpha1().DomainMappings(dm.Namespace).Delete(ctx, dm.Name, metav1.DeleteOptions{}); err != nil {
+	//				logging.FromContext(ctx).Info("failed to delete a domain mapping", zap.String("domainmapping", dm.Namespace+"/"+dm.Name), zap.Error(err))
+	//			}
+	//		}
+	//	}
+	//}
 	return nil
 }
 
@@ -147,24 +192,10 @@ func hasHint(ctx context.Context, dm *servingv1alpha1.DomainMapping, expected st
 }
 
 // TODO: move this out to the domain map Confectioner
-func (r *Reconciler) ensureDomainMapping(ctx context.Context, s *sugared.Sugared, key, value string) (*servingv1alpha1.DomainMapping, error) {
+func (r *Reconciler) ensureDomainMapping(ctx context.Context, owner kmeta.OwnerRefable, dm *servingv1alpha1.DomainMapping) (*servingv1alpha1.DomainMapping, error) {
 	//recorder := controller.GetEventRecorder(ctx)
 
-	// TODO: the domain mapping hint needs to match the key we are passed here, or it is the wrong domain map.
-
-	apiVersion, kind := s.Resource.GetGroupVersionKind().ToAPIVersionAndKind()
-
-	dm := resources.MakeDomainMapping(&resources.DomainMappingArgs{
-		Name:  value,
-		Hint:  key,
-		Owner: s.Resource,
-		Ref: duckv1.KReference{
-			Kind:       kind,
-			Namespace:  s.Resource.GetObjectMeta().GetNamespace(),
-			Name:       s.Resource.GetObjectMeta().GetName(),
-			APIVersion: apiVersion,
-		},
-	})
+	// TODO: remove sugar hint from the resource creation and add it here.
 
 	existing, err := r.domainMappingLister.DomainMappings(dm.Namespace).Get(dm.Name)
 	if apierrs.IsNotFound(err) {
@@ -176,8 +207,8 @@ func (r *Reconciler) ensureDomainMapping(ctx context.Context, s *sugared.Sugared
 		//recorder.Eventf(addr, corev1.EventTypeNormal, "Created", "Created DomainMapping %q", value)
 	} else if err != nil {
 		return nil, fmt.Errorf("failed to get DomainMapping: %w", err)
-	} else if !metav1.IsControlledBy(existing, s.Resource.GetObjectMeta()) {
-		return nil, fmt.Errorf("addressable[%s]: %q does not own domain mapping: %q", kind, s.Resource.GetObjectMeta().GetName(), value)
+	} else if !metav1.IsControlledBy(existing, owner.GetObjectMeta()) {
+		return nil, fmt.Errorf("addressable[%s]: %q does not own domain mapping: %q", owner.GetGroupVersionKind().Kind, owner.GetObjectMeta().GetName(), existing.Name)
 	} else if dm, err = r.reconcileDomainMapping(ctx, dm, existing); err != nil {
 		return nil, fmt.Errorf("failed to reconcile DomainMapping: %w", err)
 	}
@@ -219,6 +250,11 @@ func (r *Reconciler) reconcileDomainMapping(ctx context.Context, desired, existi
 	// We are setting the up-to-date default values here so an update won't be triggered if the only
 	// diff is the new default values.
 	existing.SetDefaults(ctx)
+
+	// merge the labels and annotations.
+	joinNewKeys(desired.Labels, existing.Labels)
+	joinNewKeys(desired.Annotations, existing.Annotations)
+
 	equals, err := domainMappingSemanticEquals(ctx, desired, existing)
 	if err != nil {
 		return nil, err
@@ -229,8 +265,7 @@ func (r *Reconciler) reconcileDomainMapping(ctx context.Context, desired, existi
 
 	// Preserve the rest of the object (e.g. ObjectMeta except for labels and annotations).
 	existing.Spec = desired.Spec
-	existing.Labels = desired.Labels
-	existing.Annotations = desired.Annotations
+
 	return r.client.ServingV1alpha1().DomainMappings(existing.Namespace).Update(ctx, existing, metav1.UpdateOptions{})
 }
 
@@ -284,11 +319,14 @@ func (r *Reconciler) createDomainMapping(ctx context.Context, dm *servingv1alpha
 //	return original, nil
 //}
 //
-//func joinMap(main, add map[string]string) {
-//	for k, v := range add {
-//		main[k] = v
-//	}
-//}
+func joinNewKeys(main, add map[string]string) {
+	for k, v := range add {
+		if _, found := main[k]; !found {
+			main[k] = v
+		}
+	}
+}
+
 //
 //// todo: rename to something smart
 //func domainMapping(annotations map[string]string) map[string]string {

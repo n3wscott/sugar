@@ -20,20 +20,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"k8s.io/apimachinery/pkg/runtime"
+	"strings"
+
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/cache"
 	discoverylistersv1alpha1 "knative.dev/discovery/pkg/client/listers/discovery/v1alpha1"
 	"knative.dev/pkg/apis/duck"
-	"knative.dev/pkg/logging"
-	"strings"
-
 	"knative.dev/pkg/kmeta"
+	"knative.dev/pkg/logging"
 )
 
+type RealizeFn func([]runtime.Object) error
+
 type Confectioner interface {
-	Do()
+	Do(ctx context.Context, cfg *Config, fn RealizeFn) error
+	Kinds() []schema.GroupVersionKind
 }
 
 type SugarDispenser struct {
