@@ -23,9 +23,10 @@ import (
 	"knative.dev/pkg/apis/duck"
 )
 
-func NewDispenser(ctx context.Context, duckType, version, sugarPrefix string, informerFactory duck.InformerFactory) *SugarDispenser {
+func NewDispenser(ctx context.Context, duckType, version, sugarPrefix, sugarOwner string, informerFactory duck.InformerFactory) *SugarDispenser {
 	return &SugarDispenser{
 		prefix:          sugarPrefix,
+		owner:           sugarOwner,
 		informerFactory: informerFactory,
 		duckTypeLister:  clusterducktypeinformer.Get(ctx).Lister(),
 		duckTypeName:    duckType,

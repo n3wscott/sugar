@@ -18,6 +18,7 @@ package autodm
 
 import (
 	"context"
+	"knative.dev/pkg/injection/clients/dynamicclient"
 	"knative.dev/sugar/pkg/reconciler"
 	"knative.dev/sugar/pkg/sugared"
 
@@ -59,7 +60,10 @@ func NewController(gvk schema.GroupVersionKind) injection.ControllerConstructor 
 		}
 		cdtInformer := clusterducktypeinformer.Get(ctx)
 
-		sugarDispenser := sugared.NewDispenser(ctx, reconciler.Addressables, reconciler.AddressablesVersion, reconciler.DomainMappingAnnotationKey, addressableduckInformer)
+		sugarDispenser := sugared.NewDispenser(ctx,
+			reconciler.Addressables, reconciler.AddressablesVersion, // Duck type
+			reconciler.DomainMappingAnnotationKey, reconciler.AutoDomainMappingLabel, // Sugar
+			addressableduckInformer)
 
 		r := &Reconciler{
 			addressableDuckInformer: addressableduckInformer,
@@ -72,6 +76,7 @@ func NewController(gvk schema.GroupVersionKind) injection.ControllerConstructor 
 			client:                  servingclient.Get(ctx),
 			sugarDispenser:          sugarDispenser,
 			confectioner:            NewAutoDM(),
+			dc:                      dynamicclient.Get(ctx),
 		}
 		impl := controller.NewImplFull(r, controller.ControllerOptions{WorkQueueName: ReconcilerName + gvr.String(), Logger: logger})
 

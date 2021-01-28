@@ -20,7 +20,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	sugarreconciler "knative.dev/sugar/pkg/reconciler"
 	"strings"
 
 	"go.uber.org/zap"
@@ -42,6 +44,7 @@ type Confectioner interface {
 
 type SugarDispenser struct {
 	prefix          string
+	owner           string
 	informerFactory duck.InformerFactory
 	listers         map[string]cache.GenericLister
 	duckTypeLister  discoverylistersv1alpha1.ClusterDuckTypeLister
@@ -49,7 +52,7 @@ type SugarDispenser struct {
 	duckTypeVersion string
 }
 
-func (sd *SugarDispenser) Sugared(ctx context.Context, namespace, name string, gvk schema.GroupVersionKind) (*Sugared, error) {
+func (sd *SugarDispenser) getLister(ctx context.Context, gvk schema.GroupVersionKind) (cache.GenericLister, error) {
 	lister, found := sd.listers[gvk.String()]
 	if !found {
 		gvr, _ := meta.UnsafeGuessKindToResource(gvk)
@@ -59,6 +62,60 @@ func (sd *SugarDispenser) Sugared(ctx context.Context, namespace, name string, g
 		}
 		lister = l
 		sd.listers[gvk.String()] = l
+	}
+	return lister, nil
+}
+
+func (sd *SugarDispenser) List(ctx context.Context, namespace string, gvks []schema.GroupVersionKind) ([]*Sugared, error) {
+	all := make([]*Sugared, 0)
+	for _, gvk := range gvks {
+		s, err := sd.list(ctx, namespace, gvk)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, s...)
+	}
+	return all, nil
+}
+
+func (sd *SugarDispenser) list(ctx context.Context, namespace string, gvk schema.GroupVersionKind) ([]*Sugared, error) {
+	selector, err := labels.Parse(fmt.Sprintf("%s=%s", sugarreconciler.SugarOwnerLabelKey, sugarreconciler.AutoDomainMappingLabel))
+	if err != nil {
+		return nil, fmt.Errorf("failed to produce label selector: %w", err)
+	}
+
+	lister, err := sd.getLister(ctx, gvk)
+	if err != nil {
+		return nil, err
+	}
+
+	runtimeObjs, err := lister.ByNamespace(namespace).List(selector)
+	if err != nil {
+		logging.FromContext(ctx).Errorw("unable to list duck type",
+			zap.String("gvk", gvk.String()), zap.String("namespace", namespace))
+		return nil, err
+	}
+
+	s := make([]*Sugared, 0)
+	for _, runtimeObj := range runtimeObjs {
+		var ok bool
+		var resource kmeta.OwnerRefable
+		if resource, ok = runtimeObj.DeepCopyObject().(kmeta.OwnerRefable); !ok {
+			return nil, errors.New("runtime object is not convertible to kmeta.OwnerRefable type")
+		}
+
+		s = append(s, &Sugared{
+			Resource: resource,
+			Prefix:   sd.prefix,
+		})
+	}
+	return s, nil
+}
+
+func (sd *SugarDispenser) Get(ctx context.Context, namespace, name string, gvk schema.GroupVersionKind) (*Sugared, error) {
+	lister, err := sd.getLister(ctx, gvk)
+	if err != nil {
+		return nil, err
 	}
 
 	// Get the duck resource with this namespace/name
@@ -112,7 +169,7 @@ func (sd *SugarDispenser) OwnerSugaredDuckConfig(ctx context.Context, sugared *S
 		}
 
 		// Second, check if that owner is sugared.
-		so, err := sd.Sugared(ctx, sugared.Resource.GetObjectMeta().GetNamespace(), owner.Name, gvk)
+		so, err := sd.Get(ctx, sugared.Resource.GetObjectMeta().GetNamespace(), owner.Name, gvk)
 		if err != nil {
 			logging.FromContext(ctx).Errorw("failed to get sugared owner ", owner.Name,
 				zap.String("gvk", gvk.String()), zap.Error(err))

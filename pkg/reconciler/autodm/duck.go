@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -70,7 +71,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string) error {
 		return nil
 	}
 
-	s, err := r.sugarDispenser.Sugared(ctx, namespace, name, r.gvk)
+	s, err := r.sugarDispenser.Get(ctx, namespace, name, r.gvk)
 
 	if apierrs.IsNotFound(err) {
 		// The resource may no longer exist, in which case we stop processing.
@@ -94,7 +95,6 @@ func (r *Reconciler) ReconcileSugar(ctx context.Context, s *sugared.Sugared) err
 	defer cancel()
 
 	if err := r.confectioner.Do(tctx, cfg, func(objects []runtime.Object) error {
-		// TODO:
 		// For any requested resource, create or update it.
 		for _, o := range objects {
 			dm := o.(*servingv1alpha1.DomainMapping)
@@ -103,25 +103,30 @@ func (r *Reconciler) ReconcileSugar(ctx context.Context, s *sugared.Sugared) err
 			}
 		}
 		// For any resource that exists but not requested, delete it.
-		if dms, err := r.findDomainMappingsForOwner(s.Resource); err != nil {
-			logging.FromContext(ctx).Debug("failed to get list domain mappings for addressable", zap.Error(err))
+		if dms, err := r.findKindsForOwner(ctx, s.Resource); err != nil {
+			logging.FromContext(ctx).Errorw("failed to get list domain mappings for addressable", zap.Error(err)) // TODO: fix comment.
 		} else {
 			// Compare the annotations we know are on the addressable to the existing domain mappings that are owned by
 			// this addressable. We want to delete the ones that exist and are no longer annotated.
+			// TODO: fix comment.
+
+			logging.FromContext(ctx).Info("looking for lost domain maps --> ", len(dms)) // TODO: debug
+
 			for _, dm := range dms {
 				found := false
 				for k, v := range cfg.Annotations {
 					if hasHint(ctx, dm, k) {
-						if dm.Name == v {
+						if dm.GetObjectMeta().GetName() == v {
 							found = true
 						}
 						break
 					}
 				}
 				if !found {
-					logging.FromContext(ctx).Info("did not find the domain map in the annotations, deleting.", zap.String("domainmapping", dm.Namespace+"/"+dm.Name))
-					if err := r.client.ServingV1alpha1().DomainMappings(dm.Namespace).Delete(ctx, dm.Name, metav1.DeleteOptions{}); err != nil {
-						logging.FromContext(ctx).Info("failed to delete a domain mapping", zap.String("domainmapping", dm.Namespace+"/"+dm.Name), zap.Error(err))
+					logging.FromContext(ctx).Info("did not find the domain map in the annotations, deleting.", zap.String("domainmapping", dm.GetObjectMeta().GetNamespace()+"/"+dm.GetObjectMeta().GetName())) // TODO: fix key
+					gvr, _ := meta.UnsafeGuessKindToResource(dm.GetGroupVersionKind())
+					if err := r.dc.Resource(gvr).Namespace(dm.GetObjectMeta().GetNamespace()).Delete(ctx, dm.GetObjectMeta().GetName(), metav1.DeleteOptions{}); err != nil {
+						logging.FromContext(ctx).Info("failed to delete a domain mapping", zap.String("domainmapping", dm.GetObjectMeta().GetNamespace()+"/"+dm.GetObjectMeta().GetName())) // TODO: fix key
 					}
 				}
 			}
@@ -134,7 +139,7 @@ func (r *Reconciler) ReconcileSugar(ctx context.Context, s *sugared.Sugared) err
 
 	<-tctx.Done() // Block until context is done.
 
-	//if cfg.Sugared() {
+	//if cfg.Get() {
 	//	// TODO: here is where we are ready do call a DO on some thing that is making the confections.
 	//
 	//	// TODO: this is just logic for DomainMapping, will move out.
@@ -179,8 +184,8 @@ func (r *Reconciler) ReconcileSugar(ctx context.Context, s *sugared.Sugared) err
 	return nil
 }
 
-func hasHint(ctx context.Context, dm *servingv1alpha1.DomainMapping, expected string) bool {
-	value, found := dm.Annotations[sugarreconciler.DomainMappingHintAnnotationKey]
+func hasHint(ctx context.Context, resource kmeta.OwnerRefable, expected string) bool {
+	value, found := resource.GetObjectMeta().GetAnnotations()[sugarreconciler.DomainMappingHintAnnotationKey] // TODO: this is hardcoded to domain mapping... fix.
 
 	// TODO: remove debug.
 	logging.FromContext(ctx).Info("hasHint -> ", value, expected, found)
@@ -213,6 +218,30 @@ func (r *Reconciler) ensureDomainMapping(ctx context.Context, owner kmeta.OwnerR
 		return nil, fmt.Errorf("failed to reconcile DomainMapping: %w", err)
 	}
 	return dm, nil
+}
+
+func (r *Reconciler) findKindsForOwner(ctx context.Context, owner kmeta.OwnerRefable) ([]kmeta.OwnerRefable, error) {
+	s, err := r.sugarDispenser.List(ctx, owner.GetObjectMeta().GetNamespace(), r.confectioner.Kinds())
+	if err != nil {
+		return nil, err
+	}
+
+	apiVersion, kind := owner.GetGroupVersionKind().ToAPIVersionAndKind()
+
+	// Filter for the owner.
+	owned := make([]kmeta.OwnerRefable, 0)
+	for _, sugar := range s {
+		resource := sugar.Resource.GetObjectMeta()
+		ctr := metav1.GetControllerOf(resource)
+		if owner != nil &&
+			ctr.APIVersion == apiVersion &&
+			ctr.Kind == kind &&
+			ctr.Name == owner.GetObjectMeta().GetName() {
+			owned = append(owned, sugar.Resource)
+		}
+
+	}
+	return owned, nil
 }
 
 func (r *Reconciler) findDomainMappingsForOwner(addr kmeta.OwnerRefable) ([]*servingv1alpha1.DomainMapping, error) {
