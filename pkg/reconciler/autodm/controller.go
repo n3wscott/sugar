@@ -18,6 +18,8 @@ package autodm
 
 import (
 	"context"
+	"knative.dev/sugar/pkg/reconciler"
+	"knative.dev/sugar/pkg/sugared"
 
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -57,6 +59,8 @@ func NewController(gvk schema.GroupVersionKind) injection.ControllerConstructor 
 		}
 		cdtInformer := clusterducktypeinformer.Get(ctx)
 
+		sugarDispenser := sugared.NewDispenser(ctx, reconciler.Addressables, reconciler.AddressablesVersion, reconciler.DomainMappingAnnotationKey, addressableduckInformer)
+
 		r := &Reconciler{
 			addressableDuckInformer: addressableduckInformer,
 			addressableLister:       addressableLister,
@@ -65,6 +69,7 @@ func NewController(gvk schema.GroupVersionKind) injection.ControllerConstructor 
 			cdtLister:               cdtInformer.Lister(),
 			ownerListers:            make(map[string]cache.GenericLister),
 			client:                  servingclient.Get(ctx),
+			sugarDispenser:          sugarDispenser,
 		}
 		impl := controller.NewImplFull(r, controller.ControllerOptions{WorkQueueName: ReconcilerName + gvr.String(), Logger: logger})
 

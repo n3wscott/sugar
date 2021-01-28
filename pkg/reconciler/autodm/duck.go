@@ -18,28 +18,26 @@ package autodm
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"k8s.io/apimachinery/pkg/api/equality"
-	"k8s.io/apimachinery/pkg/labels"
-	"knative.dev/pkg/kmp"
-	"strings"
-
 	"go.uber.org/zap"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/cache"
 	discoverylistersv1alpha1 "knative.dev/discovery/pkg/client/listers/discovery/v1alpha1"
 	"knative.dev/pkg/apis/duck"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
+	"knative.dev/pkg/kmeta"
+	"knative.dev/pkg/kmp"
 	"knative.dev/pkg/logging"
 	servingv1alpha1 "knative.dev/serving/pkg/apis/serving/v1alpha1"
 	clientset "knative.dev/serving/pkg/client/clientset/versioned"
 	servinglistersv1alpha1 "knative.dev/serving/pkg/client/listers/serving/v1alpha1"
 	sugarreconciler "knative.dev/sugar/pkg/reconciler"
 	"knative.dev/sugar/pkg/reconciler/autodm/resources"
+	"knative.dev/sugar/pkg/sugared"
 )
 
 type Reconciler struct {
@@ -50,11 +48,14 @@ type Reconciler struct {
 
 	domainMappingLister servinglistersv1alpha1.DomainMappingLister
 
+	gvk schema.GroupVersionKind
 	gvr schema.GroupVersionResource
 
 	client clientset.Interface
 
 	ownerListers map[string]cache.GenericLister
+
+	sugarDispenser *sugared.SugarDispenser
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, key string) error {
@@ -65,88 +66,56 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string) error {
 		return nil
 	}
 
-	// Get the Addressable resource with this namespace/name
-	runtimeObj, err := r.addressableLister.ByNamespace(namespace).Get(name)
-	if err != nil {
-		logging.FromContext(ctx).Errorw("unable to get addressable", zap.String("key", key))
-		return nil
-	}
-
-	var ok bool
-	var original *duckv1.AddressableType
-	if original, ok = runtimeObj.(*duckv1.AddressableType); !ok {
-		logging.FromContext(ctx).Errorw("runtime object is not convertible to Addressable duck type: ", zap.Any("runtimeObj", runtimeObj))
-		// Avoid re-enqueuing.
-		return nil
-	}
+	s, err := r.sugarDispenser.Sugared(ctx, namespace, name, r.gvk)
 
 	if apierrs.IsNotFound(err) {
 		// The resource may no longer exist, in which case we stop processing.
-		logging.FromContext(ctx).Error("Addressable in work queue no longer exists")
+		logging.FromContext(ctx).Error("Resource in work queue no longer exists")
 		return nil
 	} else if err != nil {
 		return err
 	}
 
-	// Don't modify the informers copy
-	orig := original.DeepCopy()
-	// Reconcile this copy of the Addressable. We do not control the Addressable, so do not update status.
-	return r.reconcile(ctx, orig)
+	return r.ReconcileSugar(ctx, s)
 }
 
-func (r *Reconciler) reconcile(ctx context.Context, addr *duckv1.AddressableType) error {
-	logging.FromContext(ctx).Info("reconcile an addressable ", addr.Kind, " ", addr.Name)
+func (r *Reconciler) ReconcileSugar(ctx context.Context, s *sugared.Sugared) error {
+	ownerCfg, ownerSugared := r.sugarDispenser.OwnerSugaredDuckConfig(ctx, s)
 
-	addressables := make(map[string]bool)
+	// the following code looks at the owners and collects their sugar annotations, and then
+	// as we find annotations that do not exist on the
 
-	if dt, err := r.cdtLister.Get(sugarreconciler.Addressables); err != nil {
-		logging.FromContext(ctx).Debug("failed to get cluster duck type for "+sugarreconciler.Addressables, zap.Error(err))
-	} else {
-		for _, v := range dt.Status.Ducks[sugarreconciler.AddressablesVersion] {
-			key := fmt.Sprintf("%s.%s", v.Kind, v.Group())
-			addressables[key] = true
-		}
+	cfg := s.Config()
+
+	if ownerSugared {
+		cfg.Subtract(ownerCfg)
 	}
 
-	_ = addressables
+	if cfg.Sugared() {
+		// TODO: here is where we are ready do call a DO on some thing that is making the confections.
 
-	//owner domain maps
-	odm := make(map[string]string)
-	for _, owner := range addr.GetOwnerReferences() {
-		gvk := schema.FromAPIVersionAndKind(owner.APIVersion, owner.Kind)
-		key := fmt.Sprintf("%s.%s", gvk.Kind, gvk.Group)
-		// if the owner is also an addressable, go get the owners domainMapping labels.
-		if addressables[key] {
-			if dt, err := r.getAddressable(ctx, addr.Namespace, owner.Name, gvk); err != nil {
-				logging.FromContext(ctx).Debug("failed to get addressable owner", zap.Error(err))
-			} else {
-				joinMap(odm, domainMapping(dt.Annotations))
-			}
-		}
-	}
-
-	foundAnnotations := domainMapping(addr.Annotations)
-	// Look for new annotations
-	for k, v := range foundAnnotations {
-		if _, found := odm[k]; !found {
-			logging.FromContext(ctx).Info("===> map ", addr.Kind, " ", addr.Name, " to ", v)
-			if _, err := r.ensureDomainMapping(ctx, addr, k, v); err != nil {
+		// TODO: this is just logic for DomainMapping, will move out.
+		for k, v := range cfg.Annotations {
+			if _, err := r.ensureDomainMapping(ctx, cfg.Sugar, k, v); err != nil {
 				logging.FromContext(ctx).Error("failed to ensure domain mapping", zap.Error(err))
 			}
-		} else {
-			logging.FromContext(ctx).Info("~~~> owned ", addr.Kind, " ", addr.Name, " to ", v)
 		}
 	}
 
+	// TODO: need to think of a way to work this into the confectioner, we might need to know of
+	// all the resources we should make based on the annotations, and then this controller makes them
+	// and then compares that list with what already exists and clean that list up. Then
+	// the confectioner is not responsible for creating any resources directly.
+
 	// Look for deleted annotations.
-	if dms, err := r.findDomainMappingsForOwner(addr); err != nil {
+	if dms, err := r.findDomainMappingsForOwner(s.Resource); err != nil {
 		logging.FromContext(ctx).Debug("failed to get list domain mappings for addressable", zap.Error(err))
 	} else {
 		// Compare the annotations we know are on the addressable to the existing domain mappings that are owned by
 		// this addressable. We want to delete the ones that exist and are no longer annotated.
 		for _, dm := range dms {
 			found := false
-			for k, v := range foundAnnotations {
+			for k, v := range cfg.Annotations {
 				if hasHint(ctx, dm, k) {
 					if dm.Name == v {
 						found = true
@@ -177,22 +146,26 @@ func hasHint(ctx context.Context, dm *servingv1alpha1.DomainMapping, expected st
 	return value == expected
 }
 
-func (r *Reconciler) ensureDomainMapping(ctx context.Context, addr *duckv1.AddressableType, key, value string) (*servingv1alpha1.DomainMapping, error) {
+// TODO: move this out to the domain map Confectioner
+func (r *Reconciler) ensureDomainMapping(ctx context.Context, s *sugared.Sugared, key, value string) (*servingv1alpha1.DomainMapping, error) {
 	//recorder := controller.GetEventRecorder(ctx)
 
 	// TODO: the domain mapping hint needs to match the key we are passed here, or it is the wrong domain map.
 
+	apiVersion, kind := s.Resource.GetGroupVersionKind().ToAPIVersionAndKind()
+
 	dm := resources.MakeDomainMapping(&resources.DomainMappingArgs{
 		Name:  value,
 		Hint:  key,
-		Owner: addr,
+		Owner: s.Resource,
 		Ref: duckv1.KReference{
-			Kind:       addr.Kind,
-			Namespace:  addr.Namespace,
-			Name:       addr.Name,
-			APIVersion: addr.APIVersion,
+			Kind:       kind,
+			Namespace:  s.Resource.GetObjectMeta().GetNamespace(),
+			Name:       s.Resource.GetObjectMeta().GetName(),
+			APIVersion: apiVersion,
 		},
 	})
+
 	existing, err := r.domainMappingLister.DomainMappings(dm.Namespace).Get(dm.Name)
 	if apierrs.IsNotFound(err) {
 		dm, err = r.createDomainMapping(ctx, dm)
@@ -203,34 +176,36 @@ func (r *Reconciler) ensureDomainMapping(ctx context.Context, addr *duckv1.Addre
 		//recorder.Eventf(addr, corev1.EventTypeNormal, "Created", "Created DomainMapping %q", value)
 	} else if err != nil {
 		return nil, fmt.Errorf("failed to get DomainMapping: %w", err)
-	} else if !metav1.IsControlledBy(existing, addr) {
-		return nil, fmt.Errorf("addressable[%s]: %q does not own domain mapping: %q", addr.Kind, addr.Name, value)
+	} else if !metav1.IsControlledBy(existing, s.Resource.GetObjectMeta()) {
+		return nil, fmt.Errorf("addressable[%s]: %q does not own domain mapping: %q", kind, s.Resource.GetObjectMeta().GetName(), value)
 	} else if dm, err = r.reconcileDomainMapping(ctx, dm, existing); err != nil {
 		return nil, fmt.Errorf("failed to reconcile DomainMapping: %w", err)
 	}
 	return dm, nil
 }
 
-func (r *Reconciler) findDomainMappingsForOwner(addr *duckv1.AddressableType) ([]*servingv1alpha1.DomainMapping, error) {
+func (r *Reconciler) findDomainMappingsForOwner(addr kmeta.OwnerRefable) ([]*servingv1alpha1.DomainMapping, error) {
 	selector, err := labels.Parse(fmt.Sprintf("%s=%s", sugarreconciler.SugarOwnerLabelKey, sugarreconciler.AutoDomainMappingLabel))
 	if err != nil {
 		return nil, fmt.Errorf("failed to produce label selector: %w", err)
 	}
 
-	dms, err := r.domainMappingLister.DomainMappings(addr.Namespace).List(selector)
+	dms, err := r.domainMappingLister.DomainMappings(addr.GetObjectMeta().GetNamespace()).List(selector)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list DomainMapping: %w", err)
 	}
+
+	apiVersion, kind := addr.GetGroupVersionKind().ToAPIVersionAndKind()
 
 	// Filter for the owner.
 	ownedDMs := make([]*servingv1alpha1.DomainMapping, 0)
 	for _, dm := range dms {
 		owner := metav1.GetControllerOf(dm)
 		if owner != nil &&
-			owner.APIVersion == addr.APIVersion &&
-			owner.Kind == addr.Kind &&
-			owner.Name == addr.Name &&
-			dm.Namespace == addr.Namespace {
+			owner.APIVersion == apiVersion &&
+			owner.Kind == kind &&
+			owner.Name == addr.GetObjectMeta().GetName() &&
+			dm.Namespace == addr.GetObjectMeta().GetNamespace() {
 			ownedDMs = append(ownedDMs, dm)
 		}
 
@@ -279,53 +254,54 @@ func (r *Reconciler) createDomainMapping(ctx context.Context, dm *servingv1alpha
 		ctx, dm, metav1.CreateOptions{})
 }
 
-func (r *Reconciler) getAddressable(ctx context.Context, namespace, name string, gvk schema.GroupVersionKind) (*duckv1.AddressableType, error) {
-	lister, found := r.ownerListers[gvk.String()]
-	if !found {
-		gvr, _ := meta.UnsafeGuessKindToResource(gvk)
-		_, l, err := r.addressableDuckInformer.Get(ctx, gvr)
-		if err != nil {
-			return nil, err
-		}
-		lister = l
-		r.ownerListers[gvk.String()] = l
-	}
-
-	// Get the Addressable resource with this namespace/name
-	runtimeObj, err := lister.ByNamespace(namespace).Get(name)
-	if err != nil {
-		logging.FromContext(ctx).Errorw("unable to get addressable", zap.String("gvk", gvk.String()), zap.String("key", namespace+"/"+name))
-		return nil, err
-	}
-
-	var ok bool
-	var original *duckv1.AddressableType
-	if original, ok = runtimeObj.(*duckv1.AddressableType); !ok {
-		logging.FromContext(ctx).Errorw("runtime object is not convertible to Addressable duck type: ", zap.Any("runtimeObj", runtimeObj))
-		// Avoid re-enqueuing.
-		return nil, errors.New("not an addressable duck type")
-	}
-	return original, nil
-}
-
-func joinMap(main, add map[string]string) {
-	for k, v := range add {
-		main[k] = v
-	}
-}
-
-// todo: rename to something smart
-func domainMapping(annotations map[string]string) map[string]string {
-
-	// TODO: this gets complicated real quick, we need to navigate up the owner graph and let the parent resource
-	// make the map if it is annotated with the same annotation.
-
-	dms := make(map[string]string)
-	for k, v := range annotations {
-		if strings.HasPrefix(k, sugarreconciler.DomainMappingAnnotationKey) {
-			// TODO: we could split off the index from the annotation key, or confirm it is suffixed with only a number, for now YOLO.
-			dms[k] = v
-		}
-	}
-	return dms
-}
+//
+//func (r *Reconciler) getAddressable(ctx context.Context, namespace, name string, gvk schema.GroupVersionKind) (*duckv1.AddressableType, error) {
+//	lister, found := r.ownerListers[gvk.String()]
+//	if !found {
+//		gvr, _ := meta.UnsafeGuessKindToResource(gvk)
+//		_, l, err := r.addressableDuckInformer.Get(ctx, gvr)
+//		if err != nil {
+//			return nil, err
+//		}
+//		lister = l
+//		r.ownerListers[gvk.String()] = l
+//	}
+//
+//	// Get the Addressable resource with this namespace/name
+//	runtimeObj, err := lister.ByNamespace(namespace).Get(name)
+//	if err != nil {
+//		logging.FromContext(ctx).Errorw("unable to get addressable", zap.String("gvk", gvk.String()), zap.String("key", namespace+"/"+name))
+//		return nil, err
+//	}
+//
+//	var ok bool
+//	var original *duckv1.AddressableType
+//	if original, ok = runtimeObj.(*duckv1.AddressableType); !ok {
+//		logging.FromContext(ctx).Errorw("runtime object is not convertible to Addressable duck type: ", zap.Any("runtimeObj", runtimeObj))
+//		// Avoid re-enqueuing.
+//		return nil, errors.New("not an addressable duck type")
+//	}
+//	return original, nil
+//}
+//
+//func joinMap(main, add map[string]string) {
+//	for k, v := range add {
+//		main[k] = v
+//	}
+//}
+//
+//// todo: rename to something smart
+//func domainMapping(annotations map[string]string) map[string]string {
+//
+//	// TODO: this gets complicated real quick, we need to navigate up the owner graph and let the parent resource
+//	// make the map if it is annotated with the same annotation.
+//
+//	dms := make(map[string]string)
+//	for k, v := range annotations {
+//		if strings.HasPrefix(k, sugarreconciler.DomainMappingAnnotationKey) {
+//			// TODO: we could split off the index from the annotation key, or confirm it is suffixed with only a number, for now YOLO.
+//			dms[k] = v
+//		}
+//	}
+//	return dms
+//}
